@@ -21,10 +21,13 @@ for f in sorted(os.listdir(src)):
     k = min(4 if (any(r in f.lower() for r in ROAD) and m <= 256) else 2, 1024 // m)
     if k <= 1:
         continue
-    u = Image.open(x4 + f).convert("RGBA")
+    # (colour and alpha resized each on its own: an RGBA resize weights the colour by the alpha,
+    # and Tokyo's morning sky, alpha 0 with its colour used, came out black)
+    u = Image.open(x4 + f).convert("RGB")
     tw, th = w * k, h * k
     if u.size != (tw, th):
         u = u.resize((tw, th), Image.LANCZOS)
+    u.putalpha(255)
     if "A" in o.getbands():
         u.putalpha(o.convert("RGBA").getchannel("A").resize((tw, th), Image.BICUBIC))
     u.save(out + f)

@@ -197,6 +197,15 @@ def astc_level(im, block):
             return fp.read()[16:]
 
 
+def resize_rgba(im, size):
+    """im resized with Lanczos, colour and alpha each on its own: PIL's RGBA resize weights the
+    colour by the alpha, and a texture whose alpha is 0 where its colour is used (Tokyo's
+    morning sky, nondxt_ok_iw_sky_*: the colour alone drawn) came out black"""
+    rgb = im.convert("RGB").resize(size, Image.LANCZOS)
+    rgb.putalpha(im.getchannel("A").resize(size, Image.LANCZOS))
+    return rgb
+
+
 def encode_astc(im, max_size, block=None):
     """encode16's (w, h, fmt, bytes) in ASTC: the rows as encode16 keeps them (bottom up, as GL
     takes them), each mip level made by halving the one above with Lanczos"""
@@ -206,7 +215,7 @@ def encode_astc(im, max_size, block=None):
         w, h = max(1, w // 2), max(1, h // 2)
     im = im.convert("RGBA")
     if (w, h) != im.size:
-        im = im.resize((w, h), Image.LANCZOS)
+        im = resize_rgba(im, (w, h))
     alpha = int(np.asarray(im)[..., 3].min()) < 255
     pot = w & (w - 1) == 0 and h & (h - 1) == 0
     base, level, data = (w, h), im, []
@@ -215,7 +224,7 @@ def encode_astc(im, max_size, block=None):
         lw, lh = level.size
         if not pot or (lw == 1 and lh == 1):
             break
-        level = level.resize((max(1, lw // 2), max(1, lh // 2)), Image.LANCZOS)
+        level = resize_rgba(level, (max(1, lw // 2), max(1, lh // 2)))
     return base[0], base[1], 3 + 2 * ASTC_BLOCKS[block] + alpha, b"".join(data)
 
 

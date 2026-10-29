@@ -2567,6 +2567,7 @@ static void mini_draw(void *ctx, float fade) {
 /* frames the race's title page waits for the loading at most (it should never take this
  * long: a way out should something never finish) */
 #define PRE_WAIT_MAX (20 * 60)
+#define PRE_WAIT_HD (45 * 60) /* (an HD map, read whole before the race: some 15 s on the Mi 6) */
 #define HUD_WARM_STEP 4 /* HUD sprites first-drawn a frame on the title page */
 
 /* clRaceThread::initStory: the select's realtime movie before this race (src/storymovie.h), on
@@ -3336,7 +3337,10 @@ static void menu_frame(float dt, double frame_start) {
   G.rival = story_rival();
   G.menu.story_sel = G.rival >= 0 && G.menu.game == MENU_GAME_STORY ? RIVALDB[G.rival].select : -1;
   const cardb_color *chosen = chosen_color();
-  int start_in = G.seen.track == 2 || (G.seen.track == 1 && G.seen.start == G.menu.course + 1);
+  /* (the HD maps' ASTC packs, some 270 MB, are not streamed under the race: the title page waits
+   * for all of one, or PRE_WAIT_MAX; a time zone changed just before had the race start on a
+   * map mostly not in, black: Allan 10-29) */
+  int start_in = G.seen.track == 2 || (!G.hd_maps && G.seen.track == 1 && G.seen.start == G.menu.course + 1);
   if (vs_load) start_in = G.seen.track == 2 && city == G.track_city; /* the race starts off the course's start */
   int pre = G.menu.screen == MENU_PRE || vs_load;
   int hud_in = 1;
@@ -3360,8 +3364,9 @@ static void menu_frame(float dt, double frame_start) {
   all_in = all_in && match_in;
   G.pre_wait = pre && !all_in ? G.pre_wait + 1 : 0;
   if (G.menu.screen == MENU_PRE) G.pre_frames++;
-  if (G.pre_wait == PRE_WAIT_MAX) fprintf(stderr, "race title: loading still not done (track %d), starting\n", G.seen.track);
-  G.menu.ready = all_in || G.pre_wait >= PRE_WAIT_MAX;
+  if (G.pre_wait == (G.hd_maps ? PRE_WAIT_HD : PRE_WAIT_MAX))
+    fprintf(stderr, "race title: loading still not done (track %d), starting\n", G.seen.track);
+  G.menu.ready = all_in || G.pre_wait >= (G.hd_maps ? PRE_WAIT_HD : PRE_WAIT_MAX);
   int go = menu_update(&G.menu, dt);
   int vs = G.menu.screen == MENU_VS && G.menu.vs.state == MENU_VS_LOADING;
   /* the cars fly in first (MENU_VS_MATCH), once theirs are in, the course loading on under it
