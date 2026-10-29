@@ -1,5 +1,7 @@
 #include "app.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -249,7 +251,7 @@ static struct {
   int fb_w, fb_h;
   int camera; /* 0 the arcade's view behind the car, 1 its roof view */
   float fps;
-  char error[256];
+  char error[512];
   /* frame timing of the race, for hunting hitches: perf.log in the data folder */
   FILE *perf;
   double race_time, max_phys, max_render;
@@ -369,7 +371,7 @@ static const float START[CAR_COURSES][3] = {
 };
 
 /* the build, for telling the pushes apart in perf.log */
-#define PORT_BUILD "push158"
+#define PORT_BUILD "push163"
 #define PHONE_TRAFFIC_FAR 3000.0f /* an iPhone draws the traffic this near (0.1 m, as G.rp.range) */
 
 /* the app's resident memory in MB (iOS 6 warns the app around 300 to 400 on the iPad 3) */
@@ -554,6 +556,28 @@ static void city_path(char *out, size_t n, const char *kind, int city, int zone,
     snprintf(hd, sizeof hd, "%.*s.astc.wpk", (int)(len - 4), out);
     if (access(hd, F_OK) == 0) snprintf(out, n, "%s", hd);
   }
+}
+
+/* G.error for a pack that would not open: the file, and why (the player's copy of the data is
+ * what is usually wrong: not there, not readable by the app, or cut short) */
+static void load_error(const char *path) {
+  struct stat st;
+  char why[200];
+  unsigned char m[4];
+  int fd;
+  if (stat(path, &st) != 0)
+    snprintf(why, sizeof why, "%s", errno == ENOENT ? "the file is not there" : strerror(errno));
+  else if ((fd = open(path, O_RDONLY)) < 0)
+    snprintf(why, sizeof why, "the app may not read it (%s): uninstall, install the app, open it once, then copy the data again", strerror(errno));
+  else {
+    ssize_t n = read(fd, m, 4);
+    close(fd);
+    if (n != 4 || memcmp(m, "WPK", 3) != 0)
+      snprintf(why, sizeof why, "not a WPK file (%lld bytes): damaged or not fully copied, copy it again", (long long)st.st_size);
+    else
+      snprintf(why, sizeof why, "damaged or not fully copied (%lld bytes), copy it again", (long long)st.st_size);
+  }
+  snprintf(G.error, sizeof G.error, "cannot load %s: %s", path, why);
 }
 
 /* A city's sky boxes, arrow boards (with their names, the scene file's prefix "...:" left
@@ -848,6 +872,16 @@ static int options_load(void) {
   int a, b, c, d = 1, e = 0, ao = 1, bm = 1, hq[6] = { 1, 1, 0, 1, 1, 1 }, hires = 0;
   int n = fscanf(f, "option %d %d %d %d %d %d %d %d %d %d %d %d %d %d", &a, &b, &c, &d, &e, &ao, &bm, &hq[0], &hq[1],
                  &hq[2], &hq[3], &hq[4], &hq[5], &hires);
+  /* the KEY LAYOUT's groups (menu.c MENU_LAYOUT): size percent and move, a second line */
+  int lay[9];
+  if (n >= 3 && fscanf(f, " keys %d %d %d %d %d %d %d %d %d", &lay[0], &lay[1], &lay[2], &lay[3], &lay[4], &lay[5], &lay[6],
+                       &lay[7], &lay[8]) == 9)
+    for (int g = 0; g < 3; ++g) {
+      int k = lay[g * 3];
+      G.menu.key_k[g] = k < 60 ? 60 : k > 160 ? 160 : k;
+      G.menu.key_dx[g] = lay[g * 3 + 1] < -2000 || lay[g * 3 + 1] > 2000 ? 0 : lay[g * 3 + 1];
+      G.menu.key_dy[g] = lay[g * 3 + 2] < -2000 || lay[g * 3 + 2] > 2000 ? 0 : lay[g * 3 + 2];
+    }
   fclose(f);
   if (n < 3) return 0;
   G.menu.hires = hires != 0;
@@ -864,10 +898,12 @@ static int options_load(void) {
 }
 
 static void options_save(void) {
-  static int last[14] = { -1 };
-  int now[14] = { G.menu.gyro, G.menu.gyro_sens, G.menu.over_on, G.menu.sharp_on, G.menu.pedal_slide, G.menu.ao_on,
+  static int last[23] = { -1 };
+  int now[23] = { G.menu.gyro, G.menu.gyro_sens, G.menu.over_on, G.menu.sharp_on, G.menu.pedal_slide, G.menu.ao_on,
                   G.menu.bm_on, G.menu.hd_tex, G.menu.bloom_on, G.menu.ssao_on, G.menu.wet_on, G.menu.paint_on,
                   G.menu.aa4, G.menu.hires };
+  for (int g = 0; g < 3; ++g)
+    now[14 + g * 3] = G.menu.key_k[g], now[15 + g * 3] = G.menu.key_dx[g], now[16 + g * 3] = G.menu.key_dy[g];
   if (G.options_global && !memcmp(now, last, sizeof now)) return;
   char path[1100];
   snprintf(path, sizeof path, "%s/option", G.save_dir);
@@ -875,6 +911,8 @@ static void options_save(void) {
   if (!f) return;
   fprintf(f, "option %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", now[0], now[1], now[2], now[3], now[4], now[5], now[6],
           now[7], now[8], now[9], now[10], now[11], now[12], now[13]);
+  fprintf(f, "keys %d %d %d %d %d %d %d %d %d\n", now[14], now[15], now[16], now[17], now[18], now[19], now[20], now[21],
+          now[22]);
   fclose(f);
   memcpy(last, now, sizeof last);
   G.options_global = 1;
@@ -925,6 +963,11 @@ static void garage_load(void) {
     if (sscanf(line, "cstory %d %d %199[^\n]", &a, &b, label) == 3) {
       int mk, c;
       if (car_by_label(label, &mk, &c) && a >= 0) G.menu.st_div_car[mk][c] = a, G.menu.st_bits_car[mk][c] = b & 0xfffff;
+      continue;
+    }
+    if (sscanf(line, "cbonus %d %199[^\n]", &a, label) == 2) {
+      int mk, c;
+      if (car_by_label(label, &mk, &c) && a >= 0 && a < 16) G.menu.st_bonus_car[mk][c] = (unsigned char)a;
       continue;
     }
     if (sscanf(line, "cstar %d %d %199[^\n]", &a, &b, label) == 3) {
@@ -1043,6 +1086,8 @@ static void garage_save(void) {
     fprintf(f, "cclass %d %s\n", G.menu.class_car[o->maker][o->car], label);
     /* the versus stars and count (the card's +0x180, +0x17c) */
     fprintf(f, "cstar %d %d %s\n", G.menu.vs_stars_car[o->maker][o->car], G.menu.vs_count_car[o->maker][o->car], label);
+    /* the story bonuses' flags (the card's +0x279, +0x186, +0x278, +0x187) */
+    fprintf(f, "cbonus %d %s\n", G.menu.st_bonus_car[o->maker][o->car], label);
     fprintf(f, "ctitle %d %d %d %s\n", G.menu.title_car[o->maker][o->car], G.menu.st_streak_car[o->maker][o->car],
             G.menu.vs_wins_car[o->maker][o->car], label);
     for (int c = 0; c < 10; ++c) {
@@ -1279,12 +1324,18 @@ int app_init(const char *data_dir, int fb_width, int fb_height, float screen_w, 
   /* the course goes up to GL a little each frame while the maker logos play (app_frame) */
   G.hd_maps = G.hq_on && options_peek(7, 1); /* (the HD TEXTURES: hq_apply after the menus' options) */
   if (track_open(CAR_TOKYO, zone) != 0) {
-    snprintf(G.error, sizeof G.error, "cannot load %s", path);
-    return -1;
+    /* the error names the pack that failed (it named the night one whatever the zone); the
+     * other time zone's map, when there is one, stands in */
+    city_path(path, sizeof path, "", CAR_TOKYO, zone, "wpk");
+    load_error(path);
+    fprintf(stderr, "%s\n", G.error);
+    if (zones < 2 || track_open(CAR_TOKYO, !zone) != 0) return -1;
+    zone = !zone;
+    G.error[0] = 0;
   }
   snprintf(path, sizeof path, "%s/fd3s.wpk", data_dir);
   if (wpk_load(&G.fd3s, path) != 0) {
-    snprintf(G.error, sizeof G.error, "cannot load %s", path);
+    load_error(path);
     return -1;
   }
   G.fd3s.two_sided = 1;
@@ -1358,6 +1409,10 @@ int app_init(const char *data_dir, int fb_width, int fb_height, float screen_w, 
 }
 
 void app_touch(void *id, int phase, float x, float y) {
+  if (!G.in_menu && G.menu.ending == 2) { /* the ending: a tap skips to its logo */
+    if (phase == TOUCH_BEGAN) G.menu.ending_skip |= G.menu.ending_t < MENU_ENDING_SKIP;
+    return;
+  }
   if (G.in_menu || G.paused || (G.menu.finish && phase == TOUCH_BEGAN))
     menu_touch(&G.menu, id, phase, x, y);
   else
@@ -1374,6 +1429,9 @@ static void hud_options(void) {
   G.hud.slide = G.menu.pedal_slide;
   G.hud.tilt = G.tilt;
   G.hud.full = (50.0f - (float)(G.menu.gyro_sens - 1) * (35.0f / 9.0f)) * 0.0174533f;
+  /* the KEY LAYOUT's (menu.c MENU_LAYOUT) */
+  for (int g = 0; g < HUD_KEY_GROUPS; ++g)
+    hud_layout_set(g, (float)G.menu.key_k[g] * 0.01f, (float)G.menu.key_dx[g], (float)G.menu.key_dy[g]);
 }
 
 void app_press_start(void) {
@@ -1388,6 +1446,8 @@ void app_movie_done(void) {
 
 /* the race's song stops with the last 10-in-a-row rival (clAudio::stopStream); result2 still
  * plays the result's (0x6d) */
+float app_bgm_level(void) { return G.in_menu ? 1.0f : menu_bgm_level(&G.menu); }
+
 const char *app_bgm(void) {
   return !G.in_menu && G.ten_bgm_off && !G.menu.finish ? NULL : menu_bgm(&G.menu, !G.in_menu);
 }
@@ -1793,7 +1853,18 @@ static int ten_ta_course(void) { return TEN_TA_COURSE[menu_ten_course(&G.menu)];
 
 /* the race's rival: the story's chosen episode's (the rival select's story_pick) once on its
  * title page, else a test's (WMMT_RIVAL) or none */
+/* The story ending's cars (clRaceThread::initEnding: clEffStoryType 111's getCar, model 247 the
+ * 964 RS "Blackbird", ECarType 1, twice; getChara 109 and 108), on its series 145 */
+#define ENDING_SERIES 145
+static const int ENDING_CHARA[2] = { 109, 108 };
+static int ending_row(void) {
+  for (int i = 0; i < RIVALDB_N; ++i)
+    if (RIVALDB[i].model == 247) return i;
+  return -1;
+}
+
 static int story_rival(void) {
+  if (G.menu.ending == 2 && G.menu.screen == MENU_PRE) return ending_row();
   if (G.menu.game == MENU_GAME_TEN && G.menu.screen == MENU_PRE) return TEN_FIRST;
   if (G.menu.game != MENU_GAME_STORY || G.menu.screen != MENU_PRE || G.menu.story_pick < 0) return G.rival_env;
   int pick = G.menu.story_pick;
@@ -2053,6 +2124,7 @@ static void car_packs_trim(int keep_near, const load_wants *w) {
   want[chosen_color()->pack] = 1;
   for (int i = 0; w && i < w->first && i < w->n; ++i) want[w->order[i]] = 1;
   int rows[RACE_ROWS], n_rival = rival_rows(G.rival, rows);
+  if (G.menu.ending == 2 && G.rival >= 0) rows[0] = rows[1] = G.rival, n_rival = 2;
   for (int i = 0; i < n_rival; ++i) {
     int paint, rival = rival_look(rows[i], &paint);
     if (rival >= 0) want[rival] = 1;
@@ -3233,7 +3305,8 @@ static void menu_frame(float dt, double frame_start) {
     if (G.menu.vs.area_final >= 0 || G.menu.vs.me == G.menu.vs.host) city = car_course_city(G.menu.course);
   } else if (G.menu.game == MENU_GAME_STORY) {
     int r = story_rival();
-    if (G.menu.screen == MENU_PRE && r >= 0 && RIVALDB[r].series >= 0 && RIVALDB[r].series < STORYCITY_N)
+    if (G.menu.screen == MENU_PRE && G.menu.ending == 2) city = STORYCITY[ENDING_SERIES];
+    else if (G.menu.screen == MENU_PRE && r >= 0 && RIVALDB[r].series >= 0 && RIVALDB[r].series < STORYCITY_N)
       city = STORYCITY[RIVALDB[r].series];
   } else if (G.menu.game == MENU_GAME_TEN) {
     if (G.menu.screen == MENU_PRE) city = TEN_CITY[menu_ten_course(&G.menu)];
@@ -3406,6 +3479,7 @@ static void menu_frame(float dt, double frame_start) {
       int base_paint, base = rival_base(rows[i], &base_paint);
       for (int j = 0; j < 6; ++j) rv[k].tyres[j] = CARDB_TYRES[base][j];
       rv[k].spokes = (int)CARDB_TYRES[base][6];
+      if (G.menu.ending == 2) rv[k].series = ENDING_SERIES, rv[k].character = ENDING_CHARA[k & 1];
       G.n_rival++;
     }
     load_sync(NULL);
@@ -3518,7 +3592,12 @@ static void menu_frame(float dt, double frame_start) {
       G.period_fade = G.menu.pre_fade;
       G.period_in = G.period_fade ? MOVIE_FADE : 0;
       G.menu.pre_fade = 0;
-      if (!ten && G.menu.game == MENU_GAME_STORY && G.rival >= 0) movie_open(RIVALDB[G.rival].select, G.story_race, rows, n_rival);
+      if (G.menu.ending == 2) {
+        movie_open(111, 0, rows, n_rival);
+        G.menu.ending_t = G.menu.ending_skip = 0;
+        if (G.movie_len <= 0) fprintf(stderr, "story ending: no movie, the staff roll alone\n");
+      } else if (!ten && G.menu.game == MENU_GAME_STORY && G.rival >= 0)
+        movie_open(RIVALDB[G.rival].select, G.story_race, rows, n_rival);
       perf_open();
       return;
     }
@@ -3678,7 +3757,9 @@ static void draw_backmirror(const car_state *c, int movie) {
   render_params rp = G.rp;
   rp.range[WPK_GROUND] = BM_FAR;
   rp.range[WPK_SHORT] = BM_SHORT;
-  rp.range[WPK_LONG] = -1.0f;
+  /* the big structures too (a bridge's deck and towers are the map's long batches: the car on
+   * a bridge saw itself over nothing, Allan 10-29), to the buildings' range */
+  rp.range[WPK_LONG] = BM_SHORT;
   rp.fog_near = BM_FOG;
   rp.fog_far = BM_FAR;
   rp.object_visible = NULL;
@@ -3808,7 +3889,33 @@ void app_frame(float dt) {
     menu_frame(0, frame_start);
     return;
   }
-  int movie = G.movie_len > 0;
+  /* the story ending (menu.c): its frames over the movie, the movie held at its end; a tap to
+   * the logo; then the menus */
+  int ending = G.menu.ending == 2;
+  if (ending) {
+    int steps = (int)(dt * 60.0f + 0.5f);
+    if (steps < 1) steps = 1;
+    if (G.menu.ending_skip == 1 && G.menu.ending_t < MENU_ENDING_SKIP) {
+      fprintf(stderr, "story ending: skipped at frame %d\n", G.menu.ending_t);
+      G.menu.ending_t = MENU_ENDING_SKIP;
+      G.menu.ending_skip = 2;
+    }
+    G.menu.ending_t += steps;
+    if (G.menu.ending_t >= MENU_ENDING_LEN) {
+      fprintf(stderr, "story ending: over\n");
+      if (G.movie_len > 0) car_movie_end(), hud_demo_end();
+      G.movie_len = 0;
+      snd_quiet();
+      hud_init(&G.hud, G.hud.screen_w, G.hud.screen_h);
+      G.story_race = 0;
+      menu_ending_done(&G.menu);
+      G.in_menu = 1;
+      if (G.perf) fflush(G.perf);
+      menu_frame(0, frame_start);
+      return;
+    }
+  }
+  int movie = G.movie_len > 0 || ending;
   /* the pause menu: the race stands still under it (not once the race has stopped running) */
   if (!movie && G.hud.pause_pressed && !G.paused && !G.menu.finish && G.car.race.state == CAR_RACE_RUN) {
     G.paused = 1;
@@ -3878,6 +3985,7 @@ void app_frame(float dt) {
       /* its show's frame first: while that holds the movie (clEffectTable +0x1e0), the movie's
        * time stands and its picture with it (clGraphicFreezeCallback) */
       if (hud_demo_step()) continue;
+      if (ending && G.movie_frame + 1.0f >= G.movie_len) break; /* (held at its last frame) */
       G.movie_frame += 1.0f;
       if (G.movie_frame >= G.movie_len) movie_close();
       else car_movie_update(&G.car, G.movie_frame);
@@ -4227,7 +4335,19 @@ void app_frame(float dt) {
    * and 2; then the end's sprites go up */
   hud_rival_view(view.m, proj.m);
   if (G.ten_freeze > 0) hud_negate(&G.hud);
-  if (movie) {
+  if (movie && G.menu.ending == 2) {
+    /* the staff roll; a roll's band: the movie there only, the rest black */
+    int band = menu_ending_band(G.menu.ending_t);
+    if (band) {
+      /* clSubScreen (0x85c9ba4): the staff roll's layers drawn off screen, then only the band
+       * of them (0, 288 or 0, 0; 640 x 192: its UVs the band's own) over the movie */
+      float k = (float)G.fb_h / 480.0f;
+      glEnable(GL_SCISSOR_TEST);
+      glScissor(0, band == 1 ? 0 : G.fb_h - (int)(192.0f * k + 0.5f), G.fb_w, (int)(192.0f * k + 0.5f));
+    }
+    menu_ending_draw(&G.menu);
+    if (band) glDisable(GL_SCISSOR_TEST);
+  } else if (movie) {
     hud_demo_draw(&G.hud);
     /* its last 20 frames fade out (clRaceThread::race: getFade), the race fades in from it */
     float left = G.movie_len - G.movie_frame;

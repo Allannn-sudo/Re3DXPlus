@@ -1064,10 +1064,20 @@ static const char *const SONG_FILE[BGM_LINES] = {
 /* one array: main.m tells tracks apart by pointer, and the result music goes on from the race
  * into the menus */
 static const char MUSIC_RESULT[] = "sys_04";
+/* the story ending's (seqRaceEnding: getBgm of select 111, emBgmType 54 maxi3/sys_05), from
+ * its frame 150 (clRaceThread::race resumeStream) till the skip's or 9420's fade out (120) */
+static const char MUSIC_ENDING[] = "sys_05";
+
+float menu_bgm_level(const menu_state *m) {
+  if (m->ending != 2 || m->ending_t < MENU_ENDING_SKIP) return 1.0f;
+  float v = 1.0f - (float)(m->ending_t - MENU_ENDING_SKIP) / 120.0f;
+  return v < 0 ? 0.0f : v;
+}
 
 const char *menu_bgm(const menu_state *m, int racing) {
   /* result2 stops the race's song as the race ends; clRaceThread::run only after the select's
    * last period, the song plays on into the next */
+  if (m->ending == 2) return racing && m->ending_t >= 150 && m->ending_t < MENU_ENDING_SKIP + 120 ? MUSIC_ENDING : NULL;
   if (racing && m->finish && m->finish_story != 3) return m->finish > m->finish_wait ? MUSIC_RESULT : NULL;
   if (racing || (m->screen == MENU_PRE && m->pre_quiet)) return m->song > 0 ? SONG_FILE[m->song] : NULL;
   if (m->screen < MENU_START) return NULL; /* the attract loop: its movies have their own sound */
@@ -1078,7 +1088,7 @@ const char *menu_bgm(const menu_state *m, int racing) {
    * the select music back on the mode select; the car setting's on the dress-up menu it opens */
   if (!m->dress_free && (m->screen == MENU_ST_TUNE || m->screen == MENU_TG_GET || m->screen == MENU_TG_AERO || m->screen == MENU_TG_PART ||
       m->screen == MENU_TG_WHEEL || m->screen == MENU_TG_VINYL || m->screen == MENU_TG_WEAR || m->screen == MENU_LVUP || m->screen == MENU_SHOGO ||
-      m->screen == MENU_ST_EFF || m->screen == MENU_VS_STAR))
+      m->screen == MENU_ST_EFF || m->screen == MENU_VS_STAR || m->screen == MENU_POEM || m->screen == MENU_BONUS))
     return MUSIC_RESULT;
   if (m->dress_free) return MUSIC_ENTRY;
   return m->music ? MUSIC_SELECT : MUSIC_ENTRY;
@@ -1591,6 +1601,143 @@ static void draw_option_res(const menu_state *m, float screen_w, float screen_h)
   hud_ui_end();
 }
 
+/* ---- the OPTION screen's KEY LAYOUT (MENU_LAYOUT, Allan 10-29: the touch keys' size and
+ * place the player's own): the race's keys over the screen as they will be, a group dragged
+ * by a finger moves (kept on the screen), the panel's - and + size the chosen group, RESET ALL
+ * puts every group back, DONE (or the back key) back to OPTION. Its key on the OPTION screen
+ * on the PEDALS row's right. Its words the HUD's (no pre-rendered ones), in the 1024 x 768
+ * layout. ---- */
+enum { LAY_SMALLER, LAY_BIGGER, LAY_RESET, LAY_DONE, LAY_BUTTONS };
+static const float LAY_PANEL[4] = { 272, 228, 480, 270 };
+static const float LAY_BUTTON[LAY_BUTTONS][4] = { { 296, 356, 110, 56 }, { 618, 356, 110, 56 }, { 296, 426, 204, 56 },
+                                                  { 524, 426, 204, 56 } };
+static const char *const LAY_GROUP[3] = { "TOP KEYS", "LEFT KEYS", "RIGHT KEYS" };
+/* the OPTION screen's key to it (640 x 480) */
+static const float OPT_LAYOUT_KEY[4] = { 446, 198, 176, 28 };
+#define LAY_K_STEP 10
+
+static int layout_button(float x, float y) {
+  for (int b = 0; b < LAY_BUTTONS; ++b) {
+    const float *r = LAY_BUTTON[b];
+    if (x >= r[0] - 6 && x < r[0] + r[2] + 6 && y >= r[1] - 6 && y < r[1] + r[3] + 6) return b;
+  }
+  return -1;
+}
+
+static void layout_clamp(menu_state *m, int g) {
+  float dx = (float)m->key_dx[g], dy = (float)m->key_dy[g];
+  hud_layout_clamp(g, m->gyro, (float)m->key_k[g] * 0.01f, &dx, &dy);
+  m->key_dx[g] = (int)floorf(dx + 0.5f), m->key_dy[g] = (int)floorf(dy + 0.5f);
+}
+
+static void layout_apply(const menu_state *m) {
+  for (int g = 0; g < HUD_KEY_GROUPS; ++g) hud_layout_set(g, (float)m->key_k[g] * 0.01f, (float)m->key_dx[g], (float)m->key_dy[g]);
+}
+
+static void layout_enter(menu_state *m) {
+  go(m, MENU_LAYOUT);
+  m->lay_drag = m->lay_tap = 0;
+  m->lay_touch = 0;
+  if (m->lay_sel < 0 || m->lay_sel >= HUD_KEY_GROUPS) m->lay_sel = HUD_KEYS_RIGHT;
+  layout_apply(m);
+}
+
+/* its touches (menu_touch's, all phases): a panel button, or a group taken and dragged; 0 for
+ * one not its own (the back key's) */
+static int layout_touch(menu_state *m, void *id, int phase, float x, float y) {
+  if (phase == TOUCH_BEGAN && !m->lay_drag) {
+    int b = layout_button(x, y);
+    if (b >= 0) {
+      m->lay_tap = b + 1;
+      return 1;
+    }
+    layout_apply(m);
+    int g = hud_layout_hit(m->gyro, x, y);
+    if (g < 0) return 0;
+    m->lay_sel = g;
+    m->lay_drag = 1, m->lay_touch = id;
+    m->lay_x = x - (float)m->key_dx[g], m->lay_y = y - (float)m->key_dy[g];
+    return 1;
+  }
+  if (!m->lay_drag || id != m->lay_touch) return phase != TOUCH_BEGAN;
+  int g = m->lay_sel;
+  m->key_dx[g] = (int)floorf(x - m->lay_x + 0.5f), m->key_dy[g] = (int)floorf(y - m->lay_y + 0.5f);
+  layout_clamp(m, g);
+  layout_apply(m);
+  if (phase == TOUCH_ENDED) {
+    m->lay_drag = 0, m->lay_touch = 0;
+    m->garage_changed = 1;
+  }
+  return 1;
+}
+
+static void layout_step(menu_state *m, int back) {
+  int b = m->lay_tap - 1;
+  m->lay_tap = 0;
+  if (back || b == LAY_DONE) {
+    snd_menu(SND_CANCEL);
+    m->lay_drag = 0, m->lay_touch = 0;
+    go(m, MENU_OPTION);
+    return;
+  }
+  int g = m->lay_sel;
+  if (b == LAY_SMALLER || b == LAY_BIGGER) {
+    int k = m->key_k[g] + (b == LAY_BIGGER ? LAY_K_STEP : -LAY_K_STEP);
+    if (k < (int)(HUD_KEY_K_MIN * 100 + 0.5f) || k > (int)(HUD_KEY_K_MAX * 100 + 0.5f)) return;
+    snd_menu(SND_CURSOR);
+    m->key_k[g] = k;
+    layout_clamp(m, g);
+    m->garage_changed = 1;
+  } else if (b == LAY_RESET) {
+    snd_menu(SND_SELECT);
+    for (int i = 0; i < HUD_KEY_GROUPS; ++i) m->key_k[i] = 100, m->key_dx[i] = m->key_dy[i] = 0;
+    m->garage_changed = 1;
+  }
+  layout_apply(m);
+}
+
+static void layout_text_mid(const char *s, float y, float px, float r, float g, float b) {
+  hud_ui_text(s, 512.0f - 0.5f * hud_ui_text_width(s, px), y, px, r, g, b, 1);
+}
+
+static void draw_layout(const menu_state *m, int clock, float screen_w, float screen_h) {
+  draw_back(ID.bg, clock % 600, 1);
+  anm_fill(0, 0, 0, 0.6f);
+  hud_ui_begin(screen_w, screen_h);
+  const float *p = LAY_PANEL;
+  hud_ui_rect(p[0], p[1], p[2], p[3], 0.03f, 0.04f, 0.06f, 0.82f);
+  hud_ui_rect(p[0], p[1], p[2], 3, 1.0f, 0.42f, 0.05f, 0.95f);
+  layout_text_mid("KEY LAYOUT", p[1] + 16, 4, 1, 1, 1);
+  layout_text_mid("DRAG A GROUP OF KEYS TO MOVE IT", p[1] + 62, 2, 0.8f, 0.8f, 0.8f);
+  char line[48];
+  int g = m->lay_sel >= 0 && m->lay_sel < 3 ? m->lay_sel : 0;
+  layout_text_mid(LAY_GROUP[g], p[1] + 92, 2.5f, 1.0f, 0.55f, 0.15f);
+  static const char *const LABEL[LAY_BUTTONS] = { "-", "+", "RESET ALL", "DONE" };
+  for (int b = 0; b < LAY_BUTTONS; ++b) {
+    const float *r = LAY_BUTTON[b];
+    float px = b < 2 ? 5.0f : 3.0f;
+    hud_ui_button(r[0], r[1], r[2], r[3], m->lay_tap == b + 1);
+    hud_ui_text(LABEL[b], r[0] + 0.5f * (r[2] - hud_ui_text_width(LABEL[b], px)), r[1] + 0.5f * (r[3] - 7.0f * px), px, 1, 1,
+                1, 1);
+  }
+  snprintf(line, sizeof line, "SIZE %d", m->key_k[g]);
+  layout_text_mid(line, LAY_BUTTON[0][1] + 0.5f * (LAY_BUTTON[0][3] - 7.0f * 3), 3, 1, 1, 1);
+  hud_ui_end();
+  layout_apply(m);
+  hud_draw_layout(screen_w, screen_h, m->gyro, g);
+}
+
+/* the OPTION screen's key to KEY LAYOUT (its words the HUD's, over the bars like RESOLUTION's) */
+static void draw_option_layout_key(float screen_w, float screen_h) {
+  const float *r = OPT_LAYOUT_KEY, k = 1.6f;
+  hud_ui_begin(screen_w, screen_h);
+  hud_ui_button(r[0] * k, r[1] * k, r[2] * k, r[3] * k, 0);
+  const char *s = "KEY LAYOUT >";
+  hud_ui_text(s, (r[0] + 0.5f * r[2]) * k - 0.5f * hud_ui_text_width(s, 2.5f), (r[1] + 0.5f * r[3]) * k - 3.5f * 2.5f, 2.5f, 1,
+              1, 1, 1);
+  hud_ui_end();
+}
+
 static void option_step(menu_state *m, int tap, int key) {
   if (key) {
     int s = m->gyro_sens + key;
@@ -1598,6 +1745,12 @@ static void option_step(menu_state *m, int tap, int key) {
     return;
   }
   if (!tap) return;
+  const float *lk = OPT_LAYOUT_KEY;
+  if (m->tap_x >= lk[0] && m->tap_x < lk[0] + lk[2] && m->tap_y >= lk[1] - 4 && m->tap_y < lk[1] + lk[3] + 4) {
+    snd_menu(SND_SELECT);
+    layout_enter(m);
+    return;
+  }
   int k = option_chip(m, O_BUTTONS, OPT_STEER_Y);
   if (k >= 0) option_set(m, &m->gyro, k);
   k = option_chip(m, O_ON, OPT_PEDAL_Y);
@@ -1955,6 +2108,7 @@ static void own_clear(menu_state *m, int mk, int c) {
   memset(m->ten_car[mk][c], 0, sizeof m->ten_car[mk][c]);
   m->class_car[mk][c] = 0;
   m->vs_stars_car[mk][c] = m->vs_count_car[mk][c] = 0;
+  m->st_bonus_car[mk][c] = 0;
 }
 
 /* the colour select's ALL PARTS key (a new kind of car's card, or one already in the save) */
@@ -1978,13 +2132,9 @@ static void own_register(menu_state *m) {
   }
   if (m->all_parts && k >= 0) {
     /* ALL PARTS: every dress-up part won (aero sets, wings, bonnets, mirrors, wheels, neons,
-     * stickers: level 63) and the story's tune full (T 34, split as the setting's full
-     * tune: its power, the rest handling) */
-    int power = m->tune_power[mk][c];
-    int p = power < SET_MIN_POWER ? SET_MIN_POWER : power > CAR_TUNE_MAX ? CAR_TUNE_MAX : power;
+     * stickers: level 63); the tune stays the setting's (STOCK the story's own, from none: it
+     * gave a full tune with STOCK chosen, Allan 10-29) */
     m->dress_lv[mk][c] = 63;
-    m->st_power[mk][c] = (signed char)p;
-    m->st_handling[mk][c] = (signed char)(CAR_TUNE_TOTAL - p);
     m->garage_changed = 1;
   }
   m->all_parts = 0;
@@ -2523,6 +2673,8 @@ static int pause_step(menu_pause *p) {
 static void go(menu_state *m, int screen);
 static void tune_open(menu_state *m);
 static void lvup_open(menu_state *m);
+static void poem_open(menu_state *m);
+static void ending_open(menu_state *m);
 static void shogo_open(menu_state *m);
 
 void menu_vs_closed(menu_state *m, const char *note) {
@@ -2592,6 +2744,17 @@ static void back_from_race(menu_state *m, int white) {
     m->tap = m->key = m->key_held = m->back = m->leaving = 0;
     return;
   }
+  /* a won select's poem (mseqStory's seqStPoem, after the tuning) */
+  if (m->game == MENU_GAME_STORY && m->poem >= 0 && !white) {
+    poem_open(m);
+    return;
+  }
+  m->poem = -1;
+  if (m->game == MENU_GAME_STORY && m->ending == 1 && !white) {
+    ending_open(m);
+    return;
+  }
+  m->ending = 0;
   /* an aero set won: the dress-up screens, out of the black */
   if (!white && tg_due(m)) return;
   /* the 10-in-a-row back to the game mode select too */
@@ -3621,9 +3784,239 @@ int menu_story_loop(const menu_state *m) { return st_loop(m); }
 int menu_story_losses(const menu_state *m) { return m->st_lost_n == m->story_n ? m->st_lost : 0; }
 
 void menu_story_lost(menu_state *m, int won) {
+  if (!won && m->story_n >= 0) m->st_bonus_car[m->maker][m->car] |= 8, m->garage_changed = 1; /* hasStoryLose */
   if (won || m->st_lost_n != m->story_n) m->st_lost = 0;
   m->st_lost_n = m->story_n;
   if (!won && m->st_lost < 99) m->st_lost++;
+}
+
+/* ---- the story's poem (seqStPoem 0x883e1d8, clStPoem; "5-9. finish: one picture"): mseqStory
+ * after a won story select (getRank 0), after the tuning screens (seqStTune, seqStTuneEff) and
+ * before the ending (select 99) and the dress-up: the select's picture (the table at 0x93fd420
+ * by getStorySelect, 0 none) played once (setAnime, layer 4) between clMenuFade's fade in and
+ * out, no tap skipping it; then on as from the tuning work. ---- */
+static const struct { short select; const char *anim; } POEMS[] = {
+  { 9, "menu_p_poem_10" }, { 14, "menu_p_poem_15" }, { 19, "menu_p_poem_20" }, { 29, "menu_p_poem_30" },
+  { 39, "menu_p_poem_90" }, { 49, "menu_p_poem_40" }, { 59, "menu_p_poem_60" }, { 69, "menu_p_poem_80" },
+  { 79, "menu_p_poem_50" }, { 84, "menu_p_poem_isida85" }, { 89, "menu_p_poem_zero90" }, { 99, "menu_p_poem_fd100" },
+  { 109, "menu_p_poem_tuner110" }, { 110, "menu_p_poem_tuner110" },
+};
+#define N_POEMS ((int)(sizeof POEMS / sizeof POEMS[0]))
+#define POEM_FADE 60 /* clMenuFade's 1 s */
+
+static int poem_anim(const menu_state *m) { return m->poem >= 0 && m->poem < N_POEMS ? anm_find(POEMS[m->poem].anim) : -1; }
+
+static void poem_open(menu_state *m) {
+  fprintf(stderr, "story poem: select %d, %s\n", m->story_pick, m->poem >= 0 ? POEMS[m->poem].anim : "-");
+  go(m, MENU_POEM);
+  m->poem_t = 0;
+  m->bars = 0;
+  m->music = 1;
+  m->tap = m->key = m->key_held = m->back = m->leaving = 0;
+}
+
+static int tg_due(menu_state *m);
+
+/* on as from the tuning work: the dress-up screens due, else the game mode select */
+static void ending_open(menu_state *m);
+
+static void poem_leave(menu_state *m) {
+  m->poem = -1;
+  if (m->ending == 1) {
+    ending_open(m);
+    return;
+  }
+  if (tg_due(m)) return;
+  go(m, MENU_GAME);
+  m->sel = game_slot(MENU_GAME_STORY);
+  m->slide = m->card_t = 0;
+  m->bars = 1;
+  m->music = 1;
+}
+
+static void poem_step(menu_state *m) {
+  int id = poem_anim(m), len = id >= 0 ? anm_frames(id) : 0;
+  if (id >= 0 && m->poem_t == 0) anm_preload(id);
+  if (++m->poem_t >= POEM_FADE + len + POEM_FADE || id < 0) poem_leave(m);
+}
+
+static void draw_poem(const menu_state *m) {
+  int id = poem_anim(m), len = id >= 0 ? anm_frames(id) : 0, t = m->poem_t;
+  anm_fill(0, 0, 0, 1);
+  if (id < 0 || len <= 0) return;
+  int f = t - POEM_FADE;
+  anm_draw(id, f < 0 ? 0 : f >= len ? len - 1 : f, 1);
+  float a = t < POEM_FADE ? (float)t / POEM_FADE : t >= POEM_FADE + len ? 1.0f - (float)(t - POEM_FADE - len) / POEM_FADE : 1.0f;
+  anm_fill(0, 0, 0, 1.0f - (a < 0 ? 0 : a));
+}
+
+/* ---- the story's ending (seqRaceEnding 0x8906b68): mseqStory's after episode 100 (the
+ * select in its loop 99) is won, after the poem: clSeqNowLoading, then clRaceThread in play
+ * mode 3 (clRaceThread::initEnding 0x88f860c): clEffStoryType 111's period 0, a realtime
+ * movie (MovieTableData 90, KgAirport_Out: the player's car and two 964s, series 145), the
+ * BGM getBgm 54 (maxi3/sys_05) from frame 150; clEndingConsole (0x85ca700, update 0x85cba50)
+ * plays its 56 events (0x93cf260: frame, cluster, anime, from, frames, screen) over it: black
+ * masks (menu_layout_ed_base_*), the staff roll (_roll_1..7), fades and the BANDAI NAMCO logo
+ * (_bng). A roll's screen 1 or 2 puts the movie in the bottom or top 640 x 192
+ * (clSubScreen::setScreen_), 0 back on the whole screen. Its button (0x40; here a tap) jumps
+ * to frame 9420 (the logo; clRaceThread::race fades the BGM out over 120 frames there), the
+ * race ends at 9780. Then the menus as after the poem. The port shows the band as the movie's
+ * own picture there (the rest black) where the arcade renders the movie into it. ---- */
+enum { ED_FADE_BLACK, ED_FADE_WHITE, ED_BNG, ED_BASE1, ED_ROLL1 = ED_BASE1 + 4, ED_NONE = ED_ROLL1 + 7, ED_ANIMS };
+static const char *const ED_NAME[ED_NONE] = {
+  "menu_layout_ed_fade_black", "menu_layout_ed_fade_white", "menu_layout_ed_bng", "menu_layout_ed_base_1",
+  "menu_layout_ed_base_2", "menu_layout_ed_base_3", "menu_layout_ed_base_4", "menu_layout_ed_roll_1",
+  "menu_layout_ed_roll_2", "menu_layout_ed_roll_3", "menu_layout_ed_roll_4", "menu_layout_ed_roll_5",
+  "menu_layout_ed_roll_6", "menu_layout_ed_roll_7",
+};
+#define FB ED_FADE_BLACK
+#define FW ED_FADE_WHITE
+#define B(k) (ED_BASE1 + (k) - 1)
+#define R(k) (ED_ROLL1 + (k) - 1)
+static const struct { short frame; unsigned char layer, anim; short from, len; unsigned char screen; } ED[] = {
+  { 0, 3, FB, 1, 119, 0 }, { 318, 0, B(1), 1, 119, 0 }, { 438, 0, B(1), 121, 1, 0 }, { 438, 2, R(1), 1, 581, 0 },
+  { 1021, 0, B(1), 121, 1, 0 }, { 1021, 3, FB, 241, 119, 0 }, { 1141, 0, B(2), 121, 1, 0 }, { 1141, 3, FB, 361, 119, 0 },
+  { 1261, 0, B(2), 121, 1, 0 }, { 1261, 2, R(2), 1, 581, 0 }, { 1843, 2, ED_NONE, 0, 0, 0 }, { 1843, 0, B(2), 121, 1, 0 },
+  { 1843, 3, FB, 241, 119, 0 }, { 1963, 0, B(3), 121, 1, 0 }, { 1963, 3, FB, 361, 119, 0 }, { 2083, 0, B(3), 121, 1, 0 },
+  { 2083, 2, R(3), 1, 797, 0 }, { 2881, 0, B(3), 121, 1, 0 }, { 2881, 3, FB, 121, 119, 0 }, { 3001, 2, ED_NONE, 0, 0, 0 },
+  { 3001, 0, B(4), 121, 1, 0 }, { 3001, 3, FB, 1, 119, 0 }, { 3121, 0, B(4), 121, 1, 0 }, { 3121, 2, R(4), 1, 1397, 1 },
+  { 4519, 2, ED_NONE, 0, 0, 0 }, { 4519, 0, B(4), 121, 1, 0 }, { 4519, 3, FB, 241, 119, 0 }, { 4639, 0, B(3), 121, 1, 0 },
+  { 4639, 3, FB, 361, 119, 0 }, { 4759, 0, B(3), 121, 1, 0 }, { 4759, 2, R(5), 1, 1403, 2 }, { 6163, 2, ED_NONE, 0, 0, 0 },
+  { 6163, 0, B(3), 121, 1, 0 }, { 6163, 3, FB, 241, 119, 0 }, { 6283, 0, B(1), 121, 1, 0 }, { 6283, 3, FB, 361, 119, 0 },
+  { 6403, 0, B(1), 121, 1, 0 }, { 6403, 2, R(6), 1, 1800, 0 }, { 8209, 0, B(1), 121, 1, 0 }, { 8209, 3, FB, 241, 119, 0 },
+  { 8329, 0, B(4), 121, 1, 0 }, { 8329, 3, FB, 361, 119, 0 }, { 8449, 0, B(4), 121, 1, 0 }, { 8449, 2, R(7), 1, 270, 0 },
+  { 8719, 3, FB, 121, 119, 0 }, { 8839, 2, ED_NONE, 0, 0, 0 }, { 8839, 3, FB, 120, 1, 0 }, { 8839, 2, R(7), 560, 190, 0 },
+  { 9300, 0, B(4), 121, 1, 3 }, { 9300, 3, FW, 121, 119, 0 }, { 9420, 2, ED_NONE, 0, 0, 0 }, { 9420, 0, ED_BNG, 0, 0, 0 },
+  { 9420, 3, FW, 1, 119, 0 }, { 9540, 0, ED_BNG, 0, 0, 0 }, { 9660, 0, ED_BNG, 0, 0, 0 }, { 9660, 3, FB, 121, 119, 0 },
+};
+#undef FB
+#undef FW
+#undef B
+#undef R
+#define N_ED ((int)(sizeof ED / sizeof ED[0]))
+
+/* layer's last event by frame t (-1 none); a skip clears the layers (update's 0x40 branch) */
+static int ed_event(int layer, int t, int skipped) {
+  int e = -1;
+  for (int k = 0; k < N_ED && ED[k].frame <= t; ++k)
+    if (ED[k].layer == layer && (!skipped || ED[k].frame >= MENU_ENDING_SKIP)) e = k;
+  return e;
+}
+
+int menu_ending_band(int t) {
+  int e = ed_event(2, t, 0);
+  return e >= 0 && (ED[e].screen == 1 || ED[e].screen == 2) ? ED[e].screen : 0;
+}
+
+void menu_ending_draw(const menu_state *m) {
+  static int id[ED_NONE], found;
+  if (!found) {
+    for (int k = 0; k < ED_NONE; ++k) id[k] = anm_find(ED_NAME[k]);
+    found = 1;
+  }
+  int t = m->ending_t;
+  for (int layer = 0; layer < 4; ++layer) {
+    int e = ed_event(layer, t, m->ending_skip);
+    if (e < 0 || ED[e].anim >= ED_NONE || id[ED[e].anim] < 0) continue;
+    int f = ED[e].from + (t - ED[e].frame), last = ED[e].len > 0 ? ED[e].from + ED[e].len - 1 : ED[e].from;
+    int n = anm_frames(id[ED[e].anim]);
+    if (f > last) f = last;
+    if (f >= n) f = n - 1;
+    if (f >= 0) anm_draw(id[ED[e].anim], f, 1);
+  }
+}
+
+static void ending_open(menu_state *m) {
+  fprintf(stderr, "story ending\n");
+  go(m, MENU_PRE);
+  m->pre_quiet = 1;
+  m->pre_fade = 0;
+  m->ending = 2;
+  m->ending_t = m->ending_skip = 0;
+  m->tap = m->key = m->key_held = m->back = m->leaving = 0;
+}
+
+static void bonus_next(menu_state *m);
+
+void menu_ending_done(menu_state *m) {
+  m->ending = m->ending_t = m->ending_skip = 0;
+  m->finish = 0;
+  if (m->bonus_due) {
+    bonus_next(m);
+    return;
+  }
+  if (tg_due(m)) return;
+  go(m, MENU_GAME);
+  m->sel = game_slot(MENU_GAME_STORY);
+  m->slide = m->card_t = 0;
+  m->bars = 1;
+  m->music = 1;
+}
+
+/* ---- the bonuses after the ending (mseqStory 0x88ccd4f..): the story clear bonus
+ * (seqStStoryModeClearBonus 0x8840ff0, clStStoryModeClearBonus) once a card (+0x279), then
+ * with no story race lost this loop (before_card.hasStoryLose) the undefeated bonus
+ * (seqStUndefeatedBonus 0x88403b8, +0x186) and the second (seqStUndefeatedBonus2 0x8841ba4,
+ * +0x278), each once. Each (ctor 0x8840e68, 0x884026c, 0x8841a58; run 0x88407f0, 0x883fc30,
+ * 0x8841450): menu_g_shogo_bg_1 and menu_g_bg_line behind, on them menu_layout_cd_cd's frames
+ * 0..179 (the card; the clear bonus' with 0x712, 0x713 swapped for its design 0x905, 0x906) or
+ * menu_layout_meter_meter2's (the second's meter), held at 179; clMenuFade in over 1/6 s, SE
+ * 0x22 (cutin2), the decide button from frame 100 or frame 601 (the second: 901) leaves, the
+ * fade out over 1/6 s. The card designs and the meter they give are not in the port (it keeps
+ * the card's flags). ---- */
+#define BONUS_FADE 10
+static void bonus_next(menu_state *m) {
+  int k = m->bonus_due & 1 ? 0 : m->bonus_due & 2 ? 1 : 2;
+  m->bonus_due &= ~(1 << k);
+  fprintf(stderr, "story bonus %d\n", k);
+  go(m, MENU_BONUS);
+  m->bonus_kind = k;
+  m->bonus_t = 0;
+  m->bars = 0;
+  m->music = 1;
+  m->tap = m->key = m->key_held = m->back = m->leaving = 0;
+}
+
+static void bonus_step(menu_state *m, int tap, int key) {
+  int t = ++m->bonus_t, f = t - BONUS_FADE, end = m->bonus_kind == 2 ? 901 : 601;
+  if (f == 0) snd_menu(SND_CUTIN2);
+  if (m->leaving) {
+    if (++m->leaving > BONUS_FADE) {
+      m->leaving = 0;
+      if (m->bonus_due) {
+        bonus_next(m);
+        return;
+      }
+      if (tg_due(m)) return;
+      go(m, MENU_GAME);
+      m->sel = game_slot(MENU_GAME_STORY);
+      m->slide = m->card_t = 0;
+      m->bars = 1;
+      m->music = 1;
+    }
+    return;
+  }
+  if (f >= end || ((tap || key) && f > 100)) m->leaving = 1;
+}
+
+static void draw_bonus(const menu_state *m, int clock) {
+  static int cd = -2, meter;
+  if (cd == -2) cd = anm_find("menu_layout_cd_cd"), meter = anm_find("menu_layout_meter_meter2");
+  anm_fill(0, 0, 0, 1);
+  if (ID.shogo_bg1 >= 0) anm_draw(ID.shogo_bg1, clock % anm_frames(ID.shogo_bg1), 1);
+  if (ID.line >= 0) anm_draw(ID.line, clock % anm_frames(ID.line), 1);
+  int f = m->bonus_t - BONUS_FADE, id = m->bonus_kind == 2 ? meter : cd;
+  if (f < 0) f = 0;
+  if (f > 179) f = 179;
+  if (id >= 0) {
+    int n = anm_frames(id);
+    if (f >= n) f = n - 1;
+    anm_swap sw[2] = { { anm_sprite(0x712), anm_sprite(0x905) }, { anm_sprite(0x713), anm_sprite(0x906) } };
+    anm_draw_ex(id, f, 1, 0, 0, m->bonus_kind == 0 ? sw : NULL, m->bonus_kind == 0 ? 2 : 0);
+  }
+  float a = m->bonus_t < BONUS_FADE ? (float)m->bonus_t / BONUS_FADE : 1.0f;
+  if (m->leaving) a = 1.0f - (float)m->leaving / BONUS_FADE;
+  anm_fill(0, 0, 0, 1.0f - (a < 0 ? 0 : a));
 }
 
 /* point_calc 0x85df20c, the story's branch: the share of a full gauge (1000 points, 20
@@ -3664,6 +4057,22 @@ int menu_story_points(menu_state *m, int won) {
     m->st_gauge[mk][c] = (signed char)g;
   }
   if (u) m->garage_changed = 1;
+  /* mseqStory: getStorySelectInLoop 99, the last episode, won: seqRaceEnding after the poem */
+  m->ending = won && n % 100 == 99;
+  /* and the bonuses after it (by the card before the race: hasStoryLose, then cleared by
+   * finiStory's episode 100 won) */
+  m->bonus_due = 0;
+  if (m->ending) {
+    unsigned char *b = &m->st_bonus_car[mk][c];
+    if (!(*b & 1)) m->bonus_due |= 1;
+    if (!(*b & 8) && !(*b & 2)) m->bonus_due |= 2;
+    if (!(*b & 8) && !(*b & 4)) m->bonus_due |= 4;
+    *b = (unsigned char)((*b | m->bonus_due) & ~8);
+    m->garage_changed = 1;
+  }
+  m->poem = -1;
+  for (int k = 0; won && k < N_POEMS; ++k)
+    if (POEMS[k].select == m->story_pick) m->poem = k;
   return u;
 }
 
@@ -4417,6 +4826,8 @@ void menu_init(menu_state *m) {
   m->zones = 1;
   menu_garage_reset(m);
   m->gyro = 0, m->gyro_sens = 5, m->over_on = 1, m->sharp_on = 1, m->ao_on = 1, m->bm_on = 1;
+  for (int g = 0; g < 3; ++g) m->key_k[g] = 100, m->key_dx[g] = m->key_dy[g] = 0;
+  m->poem = -1;
   /* (the SSAO off: its 20 ms on the Mi 6 cost the 60 fps) */
   m->hd_tex = 1, m->bloom_on = 1, m->ssao_on = 0, m->wet_on = 1, m->paint_on = 1, m->aa4 = 1;
   m->garage_changed = 0;
@@ -4464,6 +4875,7 @@ void menu_garage_reset(menu_state *m) {
   memset(m->vs_wins_car, 0, sizeof m->vs_wins_car);
   memset(m->vs_stars_car, 0, sizeof m->vs_stars_car);
   memset(m->vs_count_car, 0, sizeof m->vs_count_car);
+  memset(m->st_bonus_car, 0, sizeof m->st_bonus_car);
   m->title_n = 0;
   memset(m->name, -1, sizeof m->name);
 }
@@ -4516,6 +4928,7 @@ void menu_touch(menu_state *m, void *id, int phase, float x, float y) {
     }
     return;
   }
+  if (m->screen == MENU_LAYOUT && !(id && id == m->back_touch) && layout_touch(m, id, phase, x, y)) return;
   /* the back key works like a button: lit while pressed, it goes back only when the finger
    * comes off it (sliding off cancels), so a stray tap elsewhere never leaves the screen */
   if (id && id == m->back_touch) {
@@ -7743,6 +8156,10 @@ static void step(menu_state *m) {
     }
     return;
   }
+  if (m->screen == MENU_LAYOUT) {
+    layout_step(m, back);
+    return;
+  }
   if (m->screen == MENU_OPTION) {
     if (back) {
       snd_menu(SND_CANCEL);
@@ -7849,7 +8266,7 @@ static void step(menu_state *m) {
     return;
   }
   if (m->screen == MENU_PRE) {
-    if (m->pre_quiet && m->ready && !m->deciding) m->deciding = 1;
+    if (m->pre_quiet && m->ready && !m->deciding && (m->ending != 2 || m->t >= 60)) m->deciding = 1;
     if (m->t >= PRE_LEN && m->ready && !m->deciding) m->deciding = FADE;
     return;
   }
@@ -7871,6 +8288,14 @@ static void step(menu_state *m) {
   }
   if (m->screen == MENU_SHOGO) {
     shogo_step(m, tap, key);
+    return;
+  }
+  if (m->screen == MENU_POEM) {
+    poem_step(m);
+    return;
+  }
+  if (m->screen == MENU_BONUS) {
+    bonus_step(m, tap, key);
     return;
   }
   if (m->screen == MENU_ST_EFF) {
@@ -8101,8 +8526,13 @@ int menu_update(menu_state *m, float dt) {
         tune_done(m);
         eff_open(m, power, p0);
       } else if (m->screen == MENU_ST_EFF) {
-        /* on to the game mode select, as from a race (the dress-up screens due first) */
-        if (!tg_due(m)) {
+        /* on to the game mode select, as from a race (the select's poem, the dress-up screens
+         * due first) */
+        if (m->poem >= 0) {
+          poem_open(m);
+        } else if (m->ending == 1) {
+          ending_open(m);
+        } else if (!tg_due(m)) {
           go(m, MENU_GAME);
           m->sel = game_slot(MENU_GAME_STORY);
           m->slide = m->card_t = 0;
@@ -8289,10 +8719,18 @@ void menu_draw(const menu_state *m, float screen_w, float screen_h, void (*draw3
     if (m->flash) anm_fill(1, 1, 1, (float)m->flash / FLASH_LEN);
     return;
   }
+  if (m->screen == MENU_LAYOUT) {
+    if (m->t < FADE) fade = (float)(m->t + 1) / FADE;
+    draw_layout(m, clock, screen_w, screen_h);
+    hud_draw_menu_keys(screen_w, screen_h, m->key_held, 0, 1);
+    anm_fill(0, 0, 0, 1.0f - fade);
+    return;
+  }
   if (m->screen == MENU_OPTION) {
     if (m->t < FADE) fade = (float)(m->t + 1) / FADE;
     draw_option(m, clock, bars);
     if (m->res_row) draw_option_res(m, screen_w, screen_h);
+    draw_option_layout_key(screen_w, screen_h);
     hud_draw_menu_keys(screen_w, screen_h, m->key_held, m->gyro, 1);
     anm_fill(0, 0, 0, 1.0f - fade);
     return;
@@ -8342,6 +8780,14 @@ void menu_draw(const menu_state *m, float screen_w, float screen_h, void (*draw3
   }
   if (m->screen == MENU_SHOGO) {
     draw_shogo(m, clock);
+    return;
+  }
+  if (m->screen == MENU_POEM) {
+    draw_poem(m);
+    return;
+  }
+  if (m->screen == MENU_BONUS) {
+    draw_bonus(m, clock);
     return;
   }
   if (m->screen == MENU_ST_EFF) {
@@ -8418,6 +8864,12 @@ void menu_draw(const menu_state *m, float screen_w, float screen_h, void (*draw3
     if (m->pre_quiet) { /* the race's fade colour (black for none), no NOW LOADING */
       float g = m->pre_fade == 2 ? 1.0f : 0.0f;
       anm_fill(g, g, g, 1.0f);
+      /* but the ending's clSeqNowLoading */
+      if (m->ending == 2 && ID.loading >= 0) {
+        int f = m->t + 1;
+        float a = f > LOADING_POP ? 0.725f + 0.275f * cosf((float)(f - LOADING_POP) * (2.0f * (float)M_PI / 60.0f)) : 1.0f;
+        anm_draw_xf(ID.loading, f < LOADING_POP ? f : LOADING_POP, a, LOADING_PRE_DX, 0, 1, NULL, 0);
+      }
       return;
     }
     draw_pre(m, fade);

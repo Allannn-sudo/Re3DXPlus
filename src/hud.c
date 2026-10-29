@@ -48,14 +48,20 @@ static const rect MENU_HIDDEN = { 328, 652, 368, 56 }; /* between the left and r
  * the 1024x768 layout, which stays in the middle; the race's touch keys go out to the
  * screen's sides and grow by KEY_K about their corner there (a phone's are small). */
 static float EDGE, KEY_K = 1;
-enum { KEY_TOP, KEY_LEFT, KEY_RIGHT };
+enum { KEY_TOP, KEY_LEFT, KEY_RIGHT }; /* (hud.h's HUD_KEYS_*) */
+/* the player's own layout (hud_layout_set): each side's keys scaled about their corner, moved */
+static float USER_K[3] = { 1, 1, 1 }, USER_DX[3], USER_DY[3];
+
+/* a rect of a side's keys on screen, the side k times its size and moved (dx, dy) */
+static rect place(rect r, int side, float k, float dx, float dy) {
+  float ox = side == KEY_LEFT ? 0 : side == KEY_RIGHT ? 1024 : 512, oy = side == KEY_TOP ? 0 : 768;
+  float ex = side == KEY_LEFT ? -EDGE : side == KEY_RIGHT ? EDGE : 0;
+  k *= KEY_K;
+  return (rect){ ox + ex + dx + (r.x - ox) * k, oy + dy + (r.y - oy) * k, r.w * k, r.h * k };
+}
 
 /* a touch key's layout rect where it is on screen */
-static rect key(rect r, int side) {
-  float ox = side == KEY_LEFT ? 0 : side == KEY_RIGHT ? 1024 : 512, oy = side == KEY_TOP ? 0 : 768;
-  float dx = side == KEY_LEFT ? -EDGE : side == KEY_RIGHT ? EDGE : 0;
-  return (rect){ ox + dx + (r.x - ox) * KEY_K, oy + (r.y - oy) * KEY_K, r.w * KEY_K, r.h * KEY_K };
-}
+static rect key(rect r, int side) { return place(r, side, USER_K[side], USER_DX[side], USER_DY[side]); }
 
 /* the projection of the layout's 1024x768 on the whole screen */
 static mat4 screen_ortho(float w, float h) { return mat4_ortho(-EDGE, w + EDGE, h, 0, -1, 1); }
@@ -64,7 +70,7 @@ static mat4 screen_ortho(float w, float h) { return mat4_ortho(-EDGE, w + EDGE, 
 static mat4 key_ortho(float w, float h, int side) {
   rect r = key((rect){ 0, 0, 1, 1 }, side);
   mat4 m = mat4_identity();
-  m.m[0] = m.m[5] = KEY_K;
+  m.m[0] = m.m[5] = KEY_K * USER_K[side];
   m.m[12] = r.x, m.m[13] = r.y;
   return mat4_mul(screen_ortho(w, h), m);
 }
@@ -77,6 +83,7 @@ static mat4 key_ortho(float w, float h, int side) {
  * cut-in, which outlasts the banner by a few frames) show only the pause key, the others
  * neither drawn nor taking new touches (a port choice: the arcade has no touch keys) */
 static int keys_pause_only(void);
+static rect group_rect(int group, int gyro);
 
 static int inside(rect r, float x, float y) {
   return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
@@ -1984,23 +1991,9 @@ static void draw_countdown(const car_state *car) {
   anm_draw(anim, (3 - n) * COUNT_LEN + 16 + (f < COUNT_LEN - 1 ? f : COUNT_LEN - 1), 1);
 }
 
-void hud_draw(const hud_state *h, const car_state *car, const car_input *in, float fps) {
-  glUseProgram(prog);
-  mat4 proj = screen_ortho(h->screen_w, h->screen_h);
-  glUniformMatrix4fv(u_proj, 1, GL_FALSE, proj.m);
-  glDisable(GL_DEPTH_TEST);
-  glDisable(GL_CULL_FACE);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-  glDisableVertexAttribArray(1);
-  glDisableVertexAttribArray(2);
-  glEnableVertexAttribArray(0);
-  /* the 10-in-a-row's consoles only while TenDisp2D is set, its keys but pause too */
-  ten_disp_update(&car->race);
-  int consoles = ten_level < 0 || ten_disp, all_keys = !keys_pause_only();
-
+/* the race's touch keys (each side's in its own projection, key_ortho); steer the wheel's
+ * turn for the bar between the steer keys, all_keys 0 for pause only */
+static void draw_keys(const hud_state *h, float steer, int all_keys) {
   /* steering (the gyro's: none); each side's keys in its own projection (key_ortho) */
   if (all_keys) {
     rect brake = h->gyro ? G_BRAKE : BRAKE, up = h->gyro ? G_SHIFT_UP : SHIFT_UP, down = h->gyro ? G_SHIFT_DOWN : SHIFT_DOWN;
@@ -2018,8 +2011,8 @@ void hud_draw(const hud_state *h, const car_state *car, const car_input *in, flo
     color(0, 0, 0, 0.4f);
     fill_rect(LEFT.x, LEFT.y - 14, RIGHT.x + RIGHT.w - LEFT.x, 6);
     color(1.0f, 0.42f, 0.05f, 0.95f);
-    if (car->steer > 0) fill_rect(mid, LEFT.y - 14, car->steer * (mid - LEFT.x), 6);
-    else fill_rect(mid + car->steer * (mid - LEFT.x), LEFT.y - 14, -car->steer * (mid - LEFT.x), 6);
+    if (steer > 0) fill_rect(mid, LEFT.y - 14, steer * (mid - LEFT.x), 6);
+    else fill_rect(mid + steer * (mid - LEFT.x), LEFT.y - 14, -steer * (mid - LEFT.x), 6);
 
     /* pedals: ribbed pads, throttle tall and narrow like the cabinet's (the gyro's brake on the left) */
     if (h->gyro) {
@@ -2066,11 +2059,38 @@ void hud_draw(const hud_state *h, const car_state *car, const car_input *in, flo
   color(1, 1, 1, 0.9f);
   fill_rect(PAUSE.x + 15, PAUSE.y + 13, 6, 22);
   fill_rect(PAUSE.x + 27, PAUSE.y + 13, 6, 22);
+}
+
+void hud_draw(const hud_state *h, const car_state *car, const car_input *in, float fps) {
+  glUseProgram(prog);
+  mat4 proj = screen_ortho(h->screen_w, h->screen_h);
+  glUniformMatrix4fv(u_proj, 1, GL_FALSE, proj.m);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+  glDisableVertexAttribArray(1);
+  glDisableVertexAttribArray(2);
+  glEnableVertexAttribArray(0);
+  /* the 10-in-a-row's consoles only while TenDisp2D is set, its keys but pause too */
+  ten_disp_update(&car->race);
+  int consoles = ten_level < 0 || ten_disp, all_keys = !keys_pause_only();
+
+  draw_keys(h, car->steer, all_keys);
   glUniformMatrix4fv(u_proj, 1, GL_FALSE, proj.m);
 
-  /* small fps counter, top-left */
+  /* small fps counter, top-left: at the screen's own edge (a phone's 16:9 has its view key,
+   * bigger, where the layout's 16 is: Allan 10-29) */
   color(1, 1, 1, 0.6f);
-  number((int)(fps + 0.5f), 2, 16, 16, 12, 20);
+  {
+    /* and clear of the top keys wherever the KEY LAYOUT put them: under them if they cover it */
+    rect top = key(group_rect(KEY_TOP, h->gyro), KEY_TOP);
+    float fx = 16 - EDGE, fy = 16;
+    if (fx < top.x + top.w + 4 && fx + 2 * 12 * 1.35f > top.x - 4 && fy < top.y + top.h + 4) fy = top.y + top.h + 8;
+    number((int)(fps + 0.5f), 2, fx, fy, 12, 20);
+  }
 
   if (tex_prog) {
     glUseProgram(tex_prog);
@@ -2404,6 +2424,70 @@ void hud_lift(float dy, float left) {
   hud_lift_parts(dy, dy, dy, left, left);
   /* the back mirror is on here: the top keys either side of it again, as on the iPad */
   PAUSE.x = 236, RESET.x = 296, CAMERA.x = 116, TRANS.x = 176;
+}
+
+/* ---- the player's own key layout (hud.h hud_layout_set) ---- */
+/* a group's keys' box in the layout before key() (the steer bar over the left side's) */
+static rect group_rect(int group, int gyro) {
+  if (group == KEY_LEFT) return (rect){ LEFT.x, LEFT.y - 14, RIGHT.x + RIGHT.w - LEFT.x, LEFT.h + 14 };
+  if (group == KEY_RIGHT) {
+    float x = gyro ? G_SHIFT_UP.x : SHIFT_UP.x;
+    return (rect){ x, THROTTLE.y, THROTTLE.x + THROTTLE.w - x, BRAKE.y + BRAKE.h - THROTTLE.y };
+  }
+  return (rect){ CAMERA.x, CAMERA.y, RESET.x + RESET.w - CAMERA.x, CAMERA.h };
+}
+
+void hud_layout_set(int group, float k, float dx, float dy) {
+  if (group < 0 || group >= HUD_KEY_GROUPS) return;
+  USER_K[group] = k < HUD_KEY_K_MIN ? HUD_KEY_K_MIN : k > HUD_KEY_K_MAX ? HUD_KEY_K_MAX : k;
+  USER_DX[group] = dx, USER_DY[group] = dy;
+}
+
+int hud_layout_hit(int gyro, float x, float y) {
+  for (int g = 0; g < HUD_KEY_GROUPS; ++g) {
+    rect r = key(group_rect(g, gyro), g);
+    if (x >= r.x - 10 && x <= r.x + r.w + 10 && y >= r.y - 10 && y <= r.y + r.h + 10) return g;
+  }
+  return -1;
+}
+
+void hud_layout_clamp(int group, int gyro, float k, float *dx, float *dy) {
+  if (group < 0 || group >= HUD_KEY_GROUPS) return;
+  k = k < HUD_KEY_K_MIN ? HUD_KEY_K_MIN : k > HUD_KEY_K_MAX ? HUD_KEY_K_MAX : k;
+  rect r = place(group_rect(group, gyro), group, k, *dx, *dy);
+  if (r.x + r.w > 1024 + EDGE) *dx -= r.x + r.w - (1024 + EDGE);
+  if (r.x < -EDGE) *dx += -EDGE - r.x;
+  if (r.y + r.h > 768) *dy -= r.y + r.h - 768;
+  if (r.y < 0) *dy -= r.y;
+}
+
+void hud_draw_layout(float screen_w, float screen_h, int gyro, int sel) {
+  hud_state h;
+  hud_init(&h, screen_w, screen_h);
+  h.gyro = gyro;
+  glUseProgram(prog);
+  mat4 proj = screen_ortho(screen_w, screen_h);
+  glUniformMatrix4fv(u_proj, 1, GL_FALSE, proj.m);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+  glDisableVertexAttribArray(1);
+  glDisableVertexAttribArray(2);
+  glEnableVertexAttribArray(0);
+  draw_keys(&h, 0, 1);
+  glUniformMatrix4fv(u_proj, 1, GL_FALSE, proj.m);
+  /* each group's box, the chosen one's orange */
+  for (int g = 0; g < HUD_KEY_GROUPS; ++g) {
+    rect r = key(group_rect(g, gyro), g);
+    r = (rect){ r.x - 6, r.y - 6, r.w + 12, r.h + 12 };
+    if (g == sel) color(1.0f, 0.42f, 0.05f, 0.95f);
+    else color(1, 1, 1, 0.35f);
+    frame_rect(r, g == sel ? 4 : 2);
+  }
+  glDisable(GL_BLEND);
 }
 
 void hud_wide(float edge, float key_k) {

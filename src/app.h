@@ -30,6 +30,8 @@ void app_movie_done(void);
 /* The menu or race BGM that should play: a file name in data_dir/sound/bgm (without
  * .m4a), or NULL for none (the attract loop has its own sound). */
 const char *app_bgm(void);
+/* the BGM's level over its own (1; the story ending's fade out): main.m and main_android.c */
+float app_bgm_level(void);
 /* Loading on a thread of its own, so the menus keep their frames: after app_init main.m
  * runs app_loader on a new thread with a GL context sharing the app's current there; it
  * never returns. Without it the menu frames load in their spare time. */

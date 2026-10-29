@@ -196,6 +196,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Se
     });
   }
 
+  /* the BGM's level (the story ending's fade out; a new track starts at full) */
+  void bgmLevel(final float level) {
+    runOnUiThread(() -> {
+      if (bgm != null) bgm.setVolume(level, level);
+    });
+  }
+
   void fail(final String msg) {
     runOnUiThread(() -> new android.app.AlertDialog.Builder(this).setTitle("WMMT3DX").setMessage(msg)
         .setPositiveButton("OK", null).show());

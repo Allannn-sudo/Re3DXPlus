@@ -654,6 +654,18 @@ VS_STAR_ANIMS += ["menu_g_vs_star_%d" % k for k in (1, 2, 3)] + ["menu_g_vs_star
 VS_STAR_ANIMS += ["menu_g_vs_star_keta_b_%d" % k for k in (1, 2, 3)]
 VS_STAR_ANIMS += ["menu_g_vs_star_finish_%d" % k for k in (1, 100, 1000, 10000)] + ["menu_g_vs_star_minus1", "menu_g_vs_star_minus2"]
 ANIMS += [(n, None) for n in VS_STAR_ANIMS]
+# The story's poems (menu.c MENU_POEM, seqStPoem): a chapter's one picture after its select is won
+POEM_ANIMS = ["menu_p_poem_%s" % k for k in ("10", "15", "20", "30", "40", "50", "60", "70", "80", "90", "fd100",
+                                             "isida85", "tuner110", "zero90")]
+ANIMS += [(n, None) for n in POEM_ANIMS if (n, None) not in ANIMS]
+# The story's ending's staff roll (menu.c ENDING, clEndingConsole): its masks, rolls, fades and logo
+ENDING_ANIMS = ["menu_layout_ed_fade_black", "menu_layout_ed_fade_white", "menu_layout_ed_bng"]
+ENDING_ANIMS += ["menu_layout_ed_base_%d" % k for k in range(1, 5)] + ["menu_layout_ed_roll_%d" % k for k in range(1, 8)]
+ANIMS += [(n, None) for n in ENDING_ANIMS if (n, None) not in ANIMS]
+# and the bonuses after it (menu.c MENU_BONUS: clStStoryModeClearBonus, clStUndefeatedBonus,
+# clStUndefeatedBonus2): the card (its clear bonus design 0x905, 0x906 swapped in) and the meter
+ANIMS += [(n, None) for n in ("menu_layout_cd_cd", "menu_layout_meter_meter2") if (n, None) not in ANIMS]
+EXTRA += [0x905, 0x906]
 # the emblems by the stars held (none, falcon, horse, scorpion, bear, wasp, shark, tiger,
 # suzaku, dragon), the big stars the carry swaps in, the wins' digits menu_g_st_result_L0..9
 VS_STAR_EMBLEMS = [0x18e5, 0x1706, 0x1ab8, 0x1381, 0x1382, 0x1707, 0x1708, 0x18e6, 0x18e4]

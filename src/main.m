@@ -230,6 +230,13 @@ static void *Loader(void *context) {
     bgm = track;
     snd_ios_bgm(track);
   }
+  /* (the story ending's fade out) */
+  static float level = 1.0f;
+  float l = app_bgm_level();
+  if (l != level) {
+    level = l;
+    snd_ios_bgm_level(l);
+  }
 }
 
 - (void)startGame {
