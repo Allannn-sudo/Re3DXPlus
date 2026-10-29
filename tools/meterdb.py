@@ -15,6 +15,10 @@ usage: meterdb.py <main>
 - Its inputs (setMeter, from yt::CSeq::Get2DInfoMeter): km/h, the rev rate
   (CEngine::GetRevRate, shaped 0.96 r + 0.04 above 0.1) and the boost ((p + 0.5) * 0.4).
   A needle's turn is linear in its input: probing each input at 0 and 1 gives it.
+- The card's meter (clV386CardData::getMeter +0x26c, the card check's cardcheck_7 row:
+  Normal, For Racing, SPECIAL): clStandardConsole's ctor sets +0x299 for 1 and +0x29b for 2,
+  and drawMeter draws the racing_* or sp2_* dials then (their sprites parked at (0, 0) are
+  not drawn). Each car gets all three, morning and night.
 """
 import json
 import math
@@ -38,6 +42,7 @@ SPRITES = 0x9551560
 OBJ, MGR = 0x1FE00000, 0x1FE01000
 VIEW_BEHIND = 1
 INPUTS = ["none", "speed", "rev", "boost"]
+STYLES = [0, 0x299, 0x29B]  # the card's meter 0, 1, 2: the flag drawMeter reads
 
 
 class Meter(Main):
@@ -80,15 +85,17 @@ class Meter(Main):
         self.entries.append((sid, x, y, math.degrees(turn), int(blend == 1)))
         self.ret()
 
-    def draw(self, model, night, speed=0.0, rev=0.0, boost=0.0):
+    def draw(self, model, night, speed=0.0, rev=0.0, boost=0.0, style=0):
         o = bytearray(0x300)
         struct.pack_into("<I", o, 4, MGR)
         struct.pack_into("<3i", o, 0x27C, model, night, VIEW_BEHIND)
         struct.pack_into("<3f", o, 0x28C, speed, rev, boost)
+        if style:
+            o[style] = 1
         self.mu.mem_write(OBJ, bytes(o))
         self.entries = []
         self.call(DRAW_METER, OBJ)
-        return self.entries
+        return [e for e in self.entries if e[1] or e[2]]
 
     def sprite_name(self, sid):
         return os.path.basename(self.cstr(self.r32(SPRITES + 44 * sid)))[:-4]
@@ -109,15 +116,15 @@ def main():
         data = m.r32(CAR_DATA + 4 * car)
         hp, gears, flags = m.r32(data + 0x20), m.r32(data + 0x24), m.r32(data + 0x28)
         parts = []
-        for night in (0, 1):
-            base = m.draw(first_model[car], night)
-            probes = [m.draw(first_model[car], night, 320.0, 0, 0), m.draw(first_model[car], night, 0, 1.0, 0),
-                      m.draw(first_model[car], night, 0, 0, 1.0)]
+        for style, night in [(s, n) for s in STYLES for n in (0, 1)]:
+            base = m.draw(first_model[car], night, style=style)
+            probes = [m.draw(first_model[car], night, 320.0, 0, 0, style), m.draw(first_model[car], night, 0, 1.0, 0, style),
+                      m.draw(first_model[car], night, 0, 0, 1.0, style)]
             # (the R35 SpecV lights rev lamps near the red zone: sprites of their own, left out)
             probes = [[e for e in p if e[0] in {b[0] for b in base}] for p in probes]
             assert all(len(p) == len(base) for p in probes), folder
             names = [m.sprite_name(e[0]) for e in base]
-            sprites.setdefault(folder, [None, None])[night] = names
+            sprites.setdefault(folder, []).append(names)
             these = []
             for i, (sid, x, y, a0, add) in enumerate(base):
                 moved = [k for k, p in enumerate(probes) if abs(p[i][3] - a0) > 1e-3]
@@ -140,11 +147,14 @@ def main():
          "  int input, add;",
          "} meterdb_part;", "",
          "#define METERDB_MAX_PARTS 9",
+         "/* the card's meter (0 Normal, 1 For Racing, 2 SPECIAL), morning and night: zone 2 * meter + night */",
+         "#define METER_STYLES 3",
+         "#define METER_ZONES (2 * METER_STYLES)",
          "typedef struct {",
          "  int car;          /* the arcade's car id (stCarDataDefine) */",
          "  int hp, gears;    /* catalogue horsepower, forward gears */",
-         "  int n[2];        /* morning, night */",
-         "  meterdb_part parts[2][METERDB_MAX_PARTS];",
+         "  int n[METER_ZONES];",
+         "  meterdb_part parts[METER_ZONES][METERDB_MAX_PARTS];",
          "} meterdb_car;", "",
          "/* by CARDB_PACKS index */",
          "static const meterdb_car METERDB[%d] = {" % len(cars)]
@@ -152,11 +162,11 @@ def main():
         zones = ["{ %s }" % ", ".join("{ %g, %g, %g, %g, METER_%s, %d }" % (x, y, round(a0, 3), round(a1, 3),
                                                                           INPUTS[i].upper() if i else "FIXED", add)
                                       for x, y, a0, a1, i, add in z) for z in c["parts"]]
-        h.append("  { %d, %d, %d, { %d, %d }, { %s } }, /* %s */" % (
-            c["car"], c["hp"], c["gears"], len(c["parts"][0]), len(c["parts"][1]), ", ".join(zones), c["folder"]))
+        h.append("  { %d, %d, %d, { %s }, { %s } }, /* %s */" % (
+            c["car"], c["hp"], c["gears"], ", ".join(str(len(z)) for z in c["parts"]), ", ".join(zones), c["folder"]))
     h += ["};", "", "#endif", ""]
     open(f"{here}/../src/meterdb.h", "w").write("\n".join(h))
-    print("%d cars, %d sprites" % (len(cars), sum(len(s[0]) + len(s[1]) for s in sprites.values())))
+    print("%d cars, %d sprites" % (len(cars), sum(sum(len(z) for z in s) for s in sprites.values())))
 
 
 if __name__ == "__main__":

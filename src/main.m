@@ -121,15 +121,15 @@ static void *Loader(void *context) {
     self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     /* render at 1024x768 rather than Retina 2048x1536: the SGX543MP4 can't fill 4x the pixels
      * (an iPhone 4's A4 renders at 480x320 so); the OPTION screen's RESOLUTION 2048 X 1536
-     * (the options' 14th number, menu_state.hires) has a later iPad's Retina screen's */
+     * (the options' 14th number, menu_state.hires) has a later iPad's Retina screen's, and an
+     * iPhone's 960 X 640 the Retina iPhones' (the 4S's A5: Allan 10-29) */
     self.contentScaleFactor = 1.0f;
     FILE *opt = fopen([[SaveDir() stringByAppendingPathComponent:@"option"] fileSystemRepresentation], "r");
     if (opt) {
       int v[14], n = fscanf(opt, "option %d %d %d %d %d %d %d %d %d %d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4],
                             &v[5], &v[6], &v[7], &v[8], &v[9], &v[10], &v[11], &v[12], &v[13]);
       fclose(opt);
-      if (n == 14 && v[13] && [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
-        self.contentScaleFactor = [UIScreen mainScreen].scale;
+      if (n == 14 && v[13]) self.contentScaleFactor = [UIScreen mainScreen].scale;
     }
     CAEAGLLayer *layer = (CAEAGLLayer *)self.layer;
     layer.opaque = YES;

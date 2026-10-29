@@ -666,6 +666,10 @@ ANIMS += [(n, None) for n in ENDING_ANIMS if (n, None) not in ANIMS]
 # clStUndefeatedBonus2): the card (its clear bonus design 0x905, 0x906 swapped in) and the meter
 ANIMS += [(n, None) for n in ("menu_layout_cd_cd", "menu_layout_meter_meter2") if (n, None) not in ANIMS]
 EXTRA += [0x905, 0x906]
+# the card's settings (menu.c MENU_CARDSET, the card check's cardcheck_7 and _8): Meter and its
+# Normal / For Racing / SPECIAL, BGM sound source and its 3DX+ / MT & MT2 / R, the bar under a
+# row; the other two sets' soundtrack logos (getBgmSelectIcon: 0x1643, 0x1641, 0x19ce)
+EXTRA += [0xEED, 0x11F8, 0xC5A, 0xC5B, 0xEEE, 0x158E, 0x158C, 0x1589, 0x8B7, 0x1641, 0x19CE]
 # the emblems by the stars held (none, falcon, horse, scorpion, bear, wasp, shark, tiger,
 # suzaku, dragon), the big stars the carry swaps in, the wins' digits menu_g_st_result_L0..9
 VS_STAR_EMBLEMS = [0x18e5, 0x1706, 0x1ab8, 0x1381, 0x1382, 0x1707, 0x1708, 0x18e6, 0x18e4]
@@ -934,11 +938,14 @@ def main():
     for k, (font, text) in enumerate(TEXTS):
         sprites.append(render_text(elf, names, root, font, text))
         ids.append(TEXT_BASE + k)
-    for k in range(elf.u32(BGM_COUNTS)):
-        song = struct.unpack_from("<i", elf.d, elf.off(BGM_SET + 4 * k))[0]
-        title = "RANDOM" if song == 0x6E else "NO BGM" if song < 0 else elf.wstr(elf.u32(BGM_MUSIC + 12 * song + 8))
-        sprites.append(render_text(elf, names, root, 0, title))
-        ids.append(BGM_TEXT_BASE + k)
+    # the three sets (the card's BGM sound source, menu.c BGM_SETS: 25 ids a set): set s's line k
+    # as BGM_TEXT_BASE + 30 s + k
+    for s in range(3):
+        for k in range(elf.u32(BGM_COUNTS + 4 * s)):
+            song = struct.unpack_from("<i", elf.d, elf.off(BGM_SET + 4 * (25 * s + k)))[0]
+            title = "RANDOM" if song == 0x6E else "NO BGM" if song < 0 else elf.wstr(elf.u32(BGM_MUSIC + 12 * song + 8))
+            sprites.append(render_text(elf, names, root, 0, title))
+            ids.append(BGM_TEXT_BASE + 30 * s + k)
 
     for k, (font, text) in enumerate(SETTING_TEXTS):
         sprites.append(render_text(elf, names, root, font, text))

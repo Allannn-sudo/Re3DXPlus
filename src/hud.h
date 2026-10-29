@@ -54,6 +54,9 @@ int hud_load(const char *data_dir);
 /* The car's own meters and gear pattern: its CARDB_PACKS index (src/meterdb.h), and the
  * night meters or the morning ones. Loads their sprites from meters.bin. */
 void hud_set_car(int pack, int night);
+/* The card's meter (clV386CardData::getMeter, the card check's cardcheck_7): 0 the car's own
+ * (Normal), 1 For Racing, 2 SPECIAL; from the next hud_set_car. */
+void hud_set_meter(int style);
 /* First-draws up to n of the HUD's sprites not drawn yet (the car's meters included), for
  * the race's title page; returns how many are left. */
 int hud_warm(float screen_w, float screen_h, int n);

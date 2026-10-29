@@ -371,7 +371,7 @@ static const float START[CAR_COURSES][3] = {
 };
 
 /* the build, for telling the pushes apart in perf.log */
-#define PORT_BUILD "push163"
+#define PORT_BUILD "push164"
 #define PHONE_TRAFFIC_FAR 3000.0f /* an iPhone draws the traffic this near (0.1 m, as G.rp.range) */
 
 /* the app's resident memory in MB (iOS 6 warns the app around 300 to 400 on the iPad 3) */
@@ -965,6 +965,12 @@ static void garage_load(void) {
       if (car_by_label(label, &mk, &c) && a >= 0) G.menu.st_div_car[mk][c] = a, G.menu.st_bits_car[mk][c] = b & 0xfffff;
       continue;
     }
+    if (sscanf(line, "ccheck %d %d %199[^\n]", &a, &b, label) == 3) {
+      int mk, c;
+      if (car_by_label(label, &mk, &c) && a >= 0 && a < 3 && b >= 0 && b < 3)
+        G.menu.meter_car[mk][c] = (signed char)a, G.menu.sound_car[mk][c] = (signed char)b;
+      continue;
+    }
     if (sscanf(line, "cbonus %d %199[^\n]", &a, label) == 2) {
       int mk, c;
       if (car_by_label(label, &mk, &c) && a >= 0 && a < 16) G.menu.st_bonus_car[mk][c] = (unsigned char)a;
@@ -1088,6 +1094,8 @@ static void garage_save(void) {
     fprintf(f, "cstar %d %d %s\n", G.menu.vs_stars_car[o->maker][o->car], G.menu.vs_count_car[o->maker][o->car], label);
     /* the story bonuses' flags (the card's +0x279, +0x186, +0x278, +0x187) */
     fprintf(f, "cbonus %d %s\n", G.menu.st_bonus_car[o->maker][o->car], label);
+    /* the card check's meter (+0x26c) and BGM sound source */
+    fprintf(f, "ccheck %d %d %s\n", G.menu.meter_car[o->maker][o->car], G.menu.sound_car[o->maker][o->car], label);
     fprintf(f, "ctitle %d %d %d %s\n", G.menu.title_car[o->maker][o->car], G.menu.st_streak_car[o->maker][o->car],
             G.menu.vs_wins_car[o->maker][o->car], label);
     for (int c = 0; c < 10; ++c) {
@@ -1384,7 +1392,8 @@ int app_init(const char *data_dir, int fb_width, int fb_height, float screen_w, 
   save_open();
   G.options_global = options_load();
   G.menu.hq_rows = G.hq_on;
-  G.menu.res_row = !G.hq_on && !G.console && G.edge <= 0; /* (an iPad's) */
+  G.menu.res_row = !G.hq_on && !G.console; /* (an iPad's, an iPhone's: res_phone) */
+  G.menu.res_phone = G.edge > 0;
   hq_apply();
   garage_load();
   records_load();
@@ -3332,6 +3341,7 @@ static void menu_frame(float dt, double frame_start) {
   int pre = G.menu.screen == MENU_PRE || vs_load;
   int hud_in = 1;
   if (pre) {
+    hud_set_meter(menu_meter(&G.menu));
     hud_set_car(chosen->pack, G.track_zone == 1);
     hud_in = hud_warm(G.hud.screen_w, G.hud.screen_h, HUD_WARM_STEP) == 0;
   }
@@ -3534,6 +3544,7 @@ static void menu_frame(float dt, double frame_start) {
       hud_set_tune(car_tune_hp(CARDB_CARS[G.menu.maker][G.menu.car].hp, power), car_tune_grade(power, handling));
       hud_set_class(G.menu.class_car[G.menu.maker][G.menu.car]);
       hud_set_card(menu_title(&G.menu), G.menu.name);
+      hud_set_meter(menu_meter(&G.menu));
       hud_set_car(col->pack, z == 1);
       hud_set_course(course);
       hud_set_story(G.menu.story_sel >= 0 || vs); /* a versus: the story's console (no records) */

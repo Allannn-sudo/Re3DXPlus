@@ -245,12 +245,15 @@ static GLuint upload(const unsigned char *px, unsigned w, unsigned h) {
  * chosen car's sprites are loaded, at hud_set_car. */
 #define METER_CARS ((int)(sizeof METERDB / sizeof METERDB[0]))
 static char meter_path[1024];
-static unsigned short METER_INDEX[METER_CARS][2][METERDB_MAX_PARTS];
+static unsigned short METER_INDEX[METER_CARS][METER_ZONES][METERDB_MAX_PARTS];
 static unsigned *meter_table; /* w, h, file offset per sprite */
 static unsigned meter_sprites;
 static hud_sprite METER[METERDB_MAX_PARTS];
 static const meterdb_car *meter_car;
-static int meter_night;
+static int meter_night; /* the zone in use: 2 * the card's meter + night */
+static int meter_style; /* the card's meter (hud_set_meter): 0 Normal, 1 For Racing, 2 SPECIAL */
+
+void hud_set_meter(int style) { meter_style = style >= 0 && style < METER_STYLES ? style : 0; }
 
 static void meters_index(const char *data_dir) {
   snprintf(meter_path, sizeof meter_path, "%s/meters.bin", data_dir);
@@ -269,13 +272,14 @@ static unsigned char spr_warm[SPR_COUNT], meter_warm[METERDB_MAX_PARTS], navi_wa
 
 void hud_set_car(int pack, int night) {
   /* the race title page's already (hud_warm) */
-  if (meter_car && pack >= 0 && pack < METER_CARS && meter_car == &METERDB[pack] && meter_night == (night != 0)) return;
+  int zone = 2 * meter_style + (night != 0);
+  if (meter_car && pack >= 0 && pack < METER_CARS && meter_car == &METERDB[pack] && meter_night == zone) return;
   memset(meter_warm, 0, sizeof meter_warm);
   for (int i = 0; i < METERDB_MAX_PARTS; ++i)
     if (METER[i].tex) glDeleteTextures(1, &METER[i].tex);
   memset(METER, 0, sizeof METER);
   meter_car = pack >= 0 && pack < METER_CARS ? &METERDB[pack] : NULL;
-  meter_night = night != 0;
+  meter_night = zone;
   FILE *f = meter_car && meter_sprites ? fopen(meter_path, "rb") : NULL;
   if (!f) return;
   for (int i = 0; i < meter_car->n[meter_night]; ++i) {

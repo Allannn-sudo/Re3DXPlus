@@ -97,6 +97,11 @@ typedef struct {
    * story race lost this loop: hasStoryLose +0x187); the ones due (the same bits 1, 2, 4), the
    * one up and its frame */
   unsigned char st_bonus_car[MENU_GARAGE_MAKERS][MENU_GARAGE_CARS];
+  /* The card's settings (MENU_CARDSET, the card check's cardcheck_7 and _8, from the car
+   * setting): its meter (clV386CardData +0x26c: 0 Normal, 1 For Racing, 2 SPECIAL, which the
+   * second undefeated bonus unlocks) and BGM sound source (0 3/3DX/3DX+, 1 Maximum Tune & 2:
+   * the clear bonus, 2 Wangan Midnight R: the undefeated bonus), per car */
+  signed char meter_car[MENU_GARAGE_MAKERS][MENU_GARAGE_CARS], sound_car[MENU_GARAGE_MAKERS][MENU_GARAGE_CARS];
   int bonus_due, bonus_kind, bonus_t;
   int story_n;     /* and its place in the loop, 20 * division + 5 * level + episode */
   int course, official; /* the choice, once a race is ready */
@@ -158,7 +163,7 @@ typedef struct {
   int hq_rows, hd_tex, bloom_on, ssao_on, wet_on, paint_on, aa4;
   /* and on an iPad (res_row, set by the app), the screen's resolution: 1024x768 (0) or the
    * Retina iPads' 2048x1536 (1), from the next start (main.m reads it from the options) */
-  int res_row, hires;
+  int res_row, hires, res_phone;
   /* the gear key pressed; the maker under the cursor meanwhile; the screen it was pressed on
    * (the maker select or the SAVE DATA screen) */
   int option, opt_sel, opt_from;
@@ -410,7 +415,7 @@ enum { MENU_MOVIE, MENU_TITLE, MENU_RANKING, MENU_LOGO, MENU_PROLOGUE, MENU_STAR
        MENU_ST_LEVEL, MENU_ST_RIVAL, MENU_PRE, MENU_ST_TUNE, MENU_TEN_COURSE, MENU_TEN_LEVEL,
        MENU_TG_GET, MENU_TG_AERO, MENU_TG_PART, MENU_TG_WEAR, MENU_OPTION, MENU_SAVE, MENU_HAVE, MENU_GARAGE,
        MENU_CARD, MENU_LVUP, MENU_ST_EFF, MENU_TG_WHEEL, MENU_TG_SELECT, MENU_TG_MAKER, MENU_NAME,
-       MENU_TG_VINYL, MENU_VS, MENU_VS_SEL, MENU_VS_AREA, MENU_VS_MATCH, MENU_SHOGO, MENU_VS_STAR, MENU_INFO, MENU_LAYOUT, MENU_POEM, MENU_BONUS };
+       MENU_TG_VINYL, MENU_VS, MENU_VS_SEL, MENU_VS_AREA, MENU_VS_MATCH, MENU_SHOGO, MENU_VS_STAR, MENU_INFO, MENU_LAYOUT, MENU_POEM, MENU_BONUS, MENU_CARDSET };
 enum { MENU_GAME_STORY, MENU_GAME_TEN, MENU_GAME_TA, MENU_GAME_VS };
 
 /* The cars the car select shows in 3D this frame (the carousel, or the colour turntable),
@@ -544,6 +549,8 @@ void menu_ending_draw(const menu_state *m);
 void menu_ending_done(menu_state *m);
 /* the ending's song level (its fade out from MENU_ENDING_SKIP over 120 frames) */
 float menu_bgm_level(const menu_state *m);
+/* the chosen car's meter for the race (hud_set_meter), its unlock checked */
+int menu_meter(const menu_state *m);
 /* the host closed the game under a versus race: back to MENU_VS, off, with `note` on it */
 void menu_vs_closed(menu_state *m, const char *note);
 /* The area vote's status byte (the lobby's HELLO, which the servers pass on unread): 0 the

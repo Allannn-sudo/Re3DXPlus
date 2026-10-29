@@ -1057,6 +1057,30 @@ static const char *const SONG_FILE[BGM_LINES] = {
   "wm3_11", "wm3_12", "wm3_13", "wm3_14", "wm3_15",
   NULL,
 };
+/* The other two sets (the card's BGM sound source: nsMenuCheck's sets 1 and 2, getBgmSelectId's
+ * ids at 0x93dd780 + 25 * 4 * set, getMusicTitle's files): Maximum Tune & 2's (maxi1, maxi2)
+ * and Wangan Midnight R's; RANDOM first, NO BGM last. */
+static const char *const SONG_FILE_MT[25] = {
+  NULL, "wm2_01", "wm2_02", "wm2_03", "wm2_04", "wm2_05", "wm2_06", "wm2_07", "wm2_08", "wm2_09", "wm2_10", "wm2_11",
+  "wm2_12", "wm2_13", "wm2_14", "wm2_15", "wm2_16", "wm2_17", "wm2_18", "wm2_19", "wm2_20", "wm2_21", "wm2_22",
+  "wm2_23", NULL,
+};
+static const char *const SONG_FILE_R[14] = {
+  NULL, "wmr_01", "wmr_02", "wmr_03", "wmr_04", "wmr_05", "wmr_06", "wmr_07", "wmr_08", "wmr_09", "wmr_10", "wmr_11",
+  "wmr_12", NULL,
+};
+/* by set: its lines (nsMenuCheck's counts at 0x93dd760), files, names (menupack.py: BGM_TEXT +
+ * 30 * set + line) and soundtrack logo (getBgmSelectIcon: 0x1643, 0x1641, 0x19ce) */
+static const struct { int lines; const char *const *file; int logo; } BGM_SETS[3] = {
+  { BGM_LINES, SONG_FILE, 0x1643 }, { 25, SONG_FILE_MT, 0x1641 }, { 14, SONG_FILE_R, 0x19ce },
+};
+static int bgm_set(const menu_state *m);
+static int bgm_lines(const menu_state *m) { return BGM_SETS[bgm_set(m)].lines; }
+static const char *bgm_file(const menu_state *m, int line) {
+  int s = bgm_set(m);
+  return line > 0 && line < BGM_SETS[s].lines ? BGM_SETS[s].file[line] : NULL;
+}
+
 /* mseqEntry plays emBgmType 0x5e through the car select, mseqPlay 0x5f from the mode select on */
 #define MUSIC_ENTRY "wm3DX_P_sys_01_ent"
 #define MUSIC_SELECT "wm3DX_P_sys_02_sel"
@@ -1079,7 +1103,7 @@ const char *menu_bgm(const menu_state *m, int racing) {
    * last period, the song plays on into the next */
   if (m->ending == 2) return racing && m->ending_t >= 150 && m->ending_t < MENU_ENDING_SKIP + 120 ? MUSIC_ENDING : NULL;
   if (racing && m->finish && m->finish_story != 3) return m->finish > m->finish_wait ? MUSIC_RESULT : NULL;
-  if (racing || (m->screen == MENU_PRE && m->pre_quiet)) return m->song > 0 ? SONG_FILE[m->song] : NULL;
+  if (racing || (m->screen == MENU_PRE && m->pre_quiet)) return m->song > 0 ? bgm_file(m, m->song) : NULL;
   if (m->screen < MENU_START) return NULL; /* the attract loop: its movies have their own sound */
   /* mseqTimeAttack stops the music once the BGM is chosen (before seqTaCourseDecide) */
   if ((m->screen == MENU_BGM && m->deciding) || m->screen == MENU_PRE) return NULL;
@@ -1116,11 +1140,13 @@ static void day_decide(menu_state *m) {
   snd_menu(SND_SELECT);
   m->bgm = m->sel;
   /* getBgmSelectId: RANDOM draws one of the songs (clMTRandom over lines 1..20) */
-  m->song = m->sel == 0 ? 1 + rand() % (BGM_LINES - 2) : m->sel == BGM_LINES - 1 ? -1 : m->sel;
+  int n = bgm_lines(m);
+  m->song = m->sel == 0 ? 1 + rand() % (n - 2) : m->sel == n - 1 ? -1 : m->sel;
 }
 
 /* one step of the time zone and BGM select; returns 1 when it decides */
 static int day_select_step(menu_state *m, int tap, int key) {
+  if (m->sel >= bgm_lines(m)) m->sel = 0; /* (a line of another sound source's longer list) */
   if (m->slide) {
     /* the other card comes to rest */
     if (--m->slide == 0) {
@@ -1145,7 +1171,7 @@ static int day_select_step(menu_state *m, int tap, int key) {
   if (bgm && tap && m->tap_x >= 170.0f && m->tap_x < 560.0f && m->tap_y >= 326.0f && m->tap_y < 392.0f) d = 1;
   if (d) {
     snd_menu(SND_CURSOR);
-    m->sel = (m->sel + d + BGM_LINES) % BGM_LINES;
+    m->sel = (m->sel + d + bgm_lines(m)) % bgm_lines(m);
     return 0;
   }
   if (tap && on_card(m, 0)) {
@@ -1303,8 +1329,10 @@ static void draw_day_select(const menu_state *m, int clock, float fade, int bars
   }
   anm_draw(ID.bottom, bars, fade);
   if (m->vs.day && m->vs.me != m->vs.host) return; /* a versus' song is the host's */
-  anm_swap name = { anm_sprite(T_BGM_FONT), anm_sprite(BGM_TEXT + m->sel) };
-  anm_draw_ex(ID.day_sound, 0, fade, 0, 0, &name, 1);
+  int set = bgm_set(m);
+  anm_swap name[2] = { { anm_sprite(T_BGM_FONT), anm_sprite(BGM_TEXT + 30 * set + m->sel) },
+                       { anm_sprite(0x1643), anm_sprite(BGM_SETS[set].logo) } };
+  anm_draw_ex(ID.day_sound, 0, fade, 0, 0, name, set ? 2 : 1);
 }
 
 /* ---- the car setting (clSeqCarSettingThread: in this build only its debug menus run it,
@@ -1360,6 +1388,138 @@ static void setting_chips(float x[4]) {
 }
 
 /* one step of the car setting; returns 1 when it goes on */
+/* ---- the card's settings (MENU_CARDSET; the arcade's card check, seqCardDisp8's
+ * cardcheck_7 and seqCardDisp9's cardcheck_8, as the card goes in), from the car setting's
+ * METER / BGM key: per car (the card's). Meter (+0x26c, clStandardConsole: 1 For Racing sets
+ * +0x299, 2 SPECIAL +0x29b for drawMeter): Normal, For Racing, and SPECIAL once the second
+ * undefeated bonus is in (hasMaxi2NoLosePoint or +0x278: cardcheck_7_sel_meter2). BGM sound
+ * source (cardcheck_8: sound_sel_no / _2 / sound_sel by +0x279 and +0x186): 3/3DX/3DX+
+ * always, Maximum Tune & 2 with the story clear bonus, Wangan Midnight R with the undefeated
+ * bonus; the BGM select's set (nsMenuCheck's 0, 1, 2) follows it. Locked choices show dim
+ * with LOCKED under them. The arcade's own words and logos (menu_p_card_7_*, _8_sound_*),
+ * the rest the HUD's letters. The back key or DONE back to the car setting. ---- */
+enum { S_CS_METER = 0xEED, S_CS_NORMAL = 0x11F8, S_CS_RACING = 0xC5A, S_CS_SPECIAL = 0xC5B, S_CS_SOUND = 0xEEE,
+       S_CS_3DX = 0x158E, S_CS_MT = 0x158C, S_CS_R = 0x1589, S_CS_BAR = 0x8B7 };
+static const int CS_SPRITE[2][3] = { { S_CS_NORMAL, S_CS_RACING, S_CS_SPECIAL }, { S_CS_3DX, S_CS_MT, S_CS_R } };
+#define CS_ROW0 150.0f /* the rows' middles (640 x 480) */
+#define CS_ROW1 290.0f
+#define CS_X0 196.0f /* the choices' centres */
+#define CS_DX 150.0f
+/* DONE in the bottom bar's middle, as the other screens' keys there (hud.c MENU_HIDDEN: 328, 652,
+ * 368 x 56 in the 1024 x 768 layout; Allan 10-29) */
+static const float CS_DONE[4] = { 205, 407.5f, 230, 35 };
+/* the setting's key to it (640 x 480): in the top bar left of the wheel key (hud.c MENU_OPTION:
+ * 628, 46, 84 x 60 in the 1024 x 768 layout), clear of the car (Allan 10-29) */
+static const float SET_CS_KEY[4] = { 242.5f, 28.75f, 145, 37.5f };
+
+/* whether choice k of row (0 meter, 1 sound) is open for the car (st_bonus_car's bits) */
+static int cs_open(const menu_state *m, int row, int k) {
+  unsigned b = m->st_bonus_car[m->maker][m->car];
+  if (row == 0) return k < 2 || (b & 4);
+  return k == 0 || (k == 1 && (b & 1)) || (k == 2 && (b & 2));
+}
+
+static int bgm_set(const menu_state *m) {
+  if (m->vs.state != MENU_VS_OFF || m->maker < 0 || m->car < 0) return 0; /* a versus: everyone's the host's line */
+  int s = m->sound_car[m->maker][m->car];
+  return s > 0 && s < 3 && cs_open(m, 1, s) ? s : 0;
+}
+
+int menu_meter(const menu_state *m) {
+  if (m->maker < 0 || m->car < 0) return 0;
+  int s = m->meter_car[m->maker][m->car];
+  return s > 0 && s < 3 && cs_open(m, 0, s) ? s : 0;
+}
+
+static void cardset_open(menu_state *m) {
+  go(m, MENU_CARDSET);
+  m->tap = m->key = m->key_held = m->back = m->leaving = 0;
+}
+
+static void cardset_step(menu_state *m, int tap, int back) {
+  if (back || (tap && m->tap_x >= CS_DONE[0] && m->tap_x < CS_DONE[0] + CS_DONE[2] && m->tap_y >= CS_DONE[1] - 6 &&
+               m->tap_y < CS_DONE[1] + CS_DONE[3] + 6)) {
+    snd_menu(SND_CANCEL);
+    car_select_enter(m, MENU_SETTING);
+    return;
+  }
+  if (!tap) return;
+  for (int row = 0; row < 2; ++row) {
+    float y = row ? CS_ROW1 : CS_ROW0;
+    if (m->tap_y < y - 40.0f || m->tap_y >= y + 40.0f) continue;
+    for (int k = 0; k < 3; ++k) {
+      float x = CS_X0 + CS_DX * (float)k;
+      if (m->tap_x < x - CS_DX * 0.5f || m->tap_x >= x + CS_DX * 0.5f) continue;
+      signed char *v = row ? &m->sound_car[m->maker][m->car] : &m->meter_car[m->maker][m->car];
+      if (!cs_open(m, row, k)) {
+        snd_menu(SND_CANCEL);
+      } else if (*v != k) {
+        snd_menu(SND_CURSOR);
+        *v = (signed char)k;
+        m->garage_changed = 1;
+      }
+      return;
+    }
+  }
+}
+
+static void draw_cardset(const menu_state *m, int clock, int bars, float screen_w, float screen_h) {
+  draw_back(ID.bg, clock % 600, 1);
+  anm_draw(ID.line, clock % anm_frames(ID.line), 1);
+  int now[2] = { menu_meter(m), bgm_set(m) }, title[2] = { S_CS_METER, S_CS_SOUND };
+  for (int row = 0; row < 2; ++row) {
+    float y = row ? CS_ROW1 : CS_ROW0;
+    anm_draw_sprite(anm_sprite(T_SET_BAND), -192.0f, y - 50.0f, 0.5f);
+    anm_draw_sprite(anm_sprite(title[row]), 24.0f, y - 64.0f, 1);
+    for (int k = 0; k < 3; ++k) {
+      int s = anm_sprite(CS_SPRITE[row][k]);
+      if (s < 0) continue;
+      float w = anm_sprite_width(s), h = anm_sprite_height(s), sc = row ? 0.9f : 0.75f;
+      float x = CS_X0 + CS_DX * (float)k, a = !cs_open(m, row, k) ? 0.18f : now[row] == k ? 1.0f : 0.4f;
+      float src[4] = { 0, 0, w, h }, dst[4] = { x - 0.5f * w * sc, y - 0.5f * h * sc, x + 0.5f * w * sc, y + 0.5f * h * sc };
+      anm_draw_part(s, src, dst, a);
+    }
+    anm_draw_sprite(anm_sprite(S_CS_BAR), 0, y + 42.0f, 1);
+  }
+  anm_draw(ID.bottom, bars, 1);
+  /* the chosen one's frame, LOCKED under the locked ones, DONE, the title: the HUD's */
+  float k16 = 1.6f;
+  hud_ui_begin(screen_w, screen_h);
+  for (int row = 0; row < 2; ++row) {
+    float y = row ? CS_ROW1 : CS_ROW0;
+    for (int k = 0; k < 3; ++k) {
+      float x = CS_X0 + CS_DX * (float)k;
+      if (now[row] == k) {
+        float x0 = (x - 64.0f) * k16, y0 = (y - 30.0f) * k16, w = 128.0f * k16, h = 60.0f * k16;
+        hud_ui_rect(x0, y0, w, 3, 1.0f, 0.42f, 0.05f, 0.95f);
+        hud_ui_rect(x0, y0 + h - 3, w, 3, 1.0f, 0.42f, 0.05f, 0.95f);
+      }
+      if (!cs_open(m, row, k)) {
+        const char *s = "LOCKED";
+        hud_ui_text(s, x * k16 - 0.5f * hud_ui_text_width(s, 2.5f), (y + 26.0f) * k16, 2.5f, 0.85f, 0.85f, 0.85f, 1);
+      }
+    }
+  }
+  const char *t = "CARD SETTINGS";
+  hud_ui_text(t, 24.0f * k16, 40.0f * k16, 4.0f, 1, 1, 1, 1);
+  const float *d = CS_DONE;
+  hud_ui_button(d[0] * k16, d[1] * k16, d[2] * k16, d[3] * k16, 0);
+  hud_ui_text("DONE", (d[0] + 0.5f * d[2]) * k16 - 0.5f * hud_ui_text_width("DONE", 4.0f), (d[1] + 0.5f * d[3]) * k16 - 14.0f,
+              4.0f, 1, 1, 1, 1);
+  hud_ui_end();
+}
+
+/* the car setting's key to it (its words the HUD's) */
+static void draw_setting_cs_key(float screen_w, float screen_h) {
+  const float *r = SET_CS_KEY, k = 1.6f;
+  const char *s = "METER / BGM >";
+  hud_ui_begin(screen_w, screen_h);
+  hud_ui_button(r[0] * k, r[1] * k, r[2] * k, r[3] * k, 0);
+  hud_ui_text(s, (r[0] + 0.5f * r[2]) * k - 0.5f * hud_ui_text_width(s, 2.5f), (r[1] + 0.5f * r[3]) * k - 3.5f * 2.5f, 2.5f, 1,
+              1, 1, 1);
+  hud_ui_end();
+}
+
 static int setting_step(menu_state *m, int tap, int key) {
   int mk = m->maker, c = m->car;
   m->spin -= 0.3f;
@@ -1372,6 +1532,12 @@ static int setting_step(menu_state *m, int tap, int key) {
     return 0;
   }
   if (!tap) return 0;
+  const float *ck = SET_CS_KEY;
+  if (!m->new_card && m->tap_x >= ck[0] && m->tap_x < ck[0] + ck[2] && m->tap_y >= ck[1] - 6 && m->tap_y < ck[1] + ck[3] + 6) {
+    snd_menu(SND_SELECT);
+    cardset_open(m);
+    return 0;
+  }
   float x[4];
   setting_chips(x);
   if (m->tap_y >= SET_ROW_Y - 16.0f && m->tap_y < SET_ROW_Y + 46.0f) {
@@ -1571,10 +1737,13 @@ static void draw_option_hq(const menu_state *m) {
 /* An iPad's RESOLUTION row (res_row; Allan 10-27, for the Retina iPads after the iPad 3): its
  * words in the HUD's own letters (no pre-rendered ones), at the 640x480 screen's x, y; its two
  * chips' left edges and widths */
-static const char *const OPT_RES[2] = { "1024 X 768", "2048 X 1536" };
+static const char *const OPT_RES_PAD[2] = { "1024 X 768", "2048 X 1536" };
+/* an iPhone's (res_phone): the 4's 480x320 or the Retina 960x640 (the 4S: Allan 10-29) */
+static const char *const OPT_RES_PHONE[2] = { "480 X 320", "960 X 640" };
+static const char *const *opt_res(const menu_state *m) { return m->res_phone ? OPT_RES_PHONE : OPT_RES_PAD; }
 #define OPT_RES_PX 2.0f
-static void option_res_chips(float x[2], float w[2]) {
-  for (int k = 0; k < 2; ++k) w[k] = hud_ui_text_width(OPT_RES[k], OPT_RES_PX) / 1.6f;
+static void option_res_chips(const menu_state *m, float x[2], float w[2]) {
+  for (int k = 0; k < 2; ++k) w[k] = hud_ui_text_width(opt_res(m)[k], OPT_RES_PX) / 1.6f;
   x[0] = OPT_CHIP_X;
   x[1] = x[0] + w[0] + SET_CHIP_GAP;
 }
@@ -1582,7 +1751,7 @@ static void option_res_chips(float x[2], float w[2]) {
 static void option_res_step(menu_state *m) {
   float x[2], w[2];
   if (!m->res_row || m->tap_y < OPT_RES_Y - OPT_GRAPHICS_HALF || m->tap_y >= OPT_RES_Y + OPT_GRAPHICS_HALF) return;
-  option_res_chips(x, w);
+  option_res_chips(m, x, w);
   for (int k = 1; k >= 0; --k)
     if (m->tap_x >= x[k] - SET_CHIP_GAP * 0.5f && m->tap_x < x[k] + w[k] + SET_CHIP_GAP * 0.5f) {
       option_set(m, &m->hires, k);
@@ -1595,8 +1764,8 @@ static void draw_option_res(const menu_state *m, float screen_w, float screen_h)
   float x[2], w[2], k = 1.6f, top = OPT_RES_Y * k - 3.5f * OPT_RES_PX;
   hud_ui_begin(screen_w, screen_h);
   hud_ui_text("RESOLUTION", 16.0f * k, top, OPT_RES_PX, 1, 1, 1, 1);
-  option_res_chips(x, w);
-  for (int i = 0; i < 2; ++i) hud_ui_text(OPT_RES[i], x[i] * k, top, OPT_RES_PX, 1, 1, 1, m->hires == i ? 1.0f : 0.3f);
+  option_res_chips(m, x, w);
+  for (int i = 0; i < 2; ++i) hud_ui_text(opt_res(m)[i], x[i] * k, top, OPT_RES_PX, 1, 1, 1, m->hires == i ? 1.0f : 0.3f);
   hud_ui_text("(NEXT START)", (x[1] + w[1] + SET_CHIP_GAP) * k, top, OPT_RES_PX, 1, 1, 1, 0.6f);
   hud_ui_end();
 }
@@ -2109,6 +2278,7 @@ static void own_clear(menu_state *m, int mk, int c) {
   m->class_car[mk][c] = 0;
   m->vs_stars_car[mk][c] = m->vs_count_car[mk][c] = 0;
   m->st_bonus_car[mk][c] = 0;
+  m->meter_car[mk][c] = m->sound_car[mk][c] = 0;
 }
 
 /* the colour select's ALL PARTS key (a new kind of car's card, or one already in the save) */
@@ -3547,9 +3717,9 @@ static void draw_pre_as(const menu_state *m, float fade, int vs) {
     anm_draw_ex(ID.pre_ta, 0, fade, 0, 0, ta, vs ? 3 : 2);
   }
   /* getBgmName / getBgmIcon of the song drawn (NO BGM has no logo) */
-  int line = m->song > 0 ? m->song : BGM_LINES - 1;
-  anm_swap snd[2] = { { anm_sprite(T_BGM_FONT), anm_sprite(BGM_TEXT + line) },
-                      { anm_sprite(T_PRE_LOGO), m->song > 0 ? anm_sprite(T_LOGO_MAXI3) : -1 } };
+  int set = bgm_set(m), line = m->song > 0 ? m->song : bgm_lines(m) - 1;
+  anm_swap snd[2] = { { anm_sprite(T_BGM_FONT), anm_sprite(BGM_TEXT + 30 * set + line) },
+                      { anm_sprite(T_PRE_LOGO), m->song > 0 ? anm_sprite(BGM_SETS[set].logo) : -1 } };
   /* the name slides in once (30 frames) and stays */
   int sound = story && ID.pre_sound_st >= 0 ? ID.pre_sound_st : ID.pre_sound;
   int last = anm_frames(sound) - 1;
@@ -4876,6 +5046,8 @@ void menu_garage_reset(menu_state *m) {
   memset(m->vs_stars_car, 0, sizeof m->vs_stars_car);
   memset(m->vs_count_car, 0, sizeof m->vs_count_car);
   memset(m->st_bonus_car, 0, sizeof m->st_bonus_car);
+  memset(m->meter_car, 0, sizeof m->meter_car);
+  memset(m->sound_car, 0, sizeof m->sound_car);
   m->title_n = 0;
   memset(m->name, -1, sizeof m->name);
 }
@@ -8253,6 +8425,10 @@ static void step(menu_state *m) {
     tg_select_open(m);
     return;
   }
+  if (m->screen == MENU_CARDSET) {
+    cardset_step(m, tap, back);
+    return;
+  }
   if (m->screen == MENU_SETTING) {
     if (setting_step(m, tap, key)) m->deciding = FADE;
     return;
@@ -8508,7 +8684,7 @@ int menu_update(menu_state *m, float dt) {
         m->ten_level = m->sel;
         m->zone = ten_night(m->ten_course, m->ten_level);
         go(m, MENU_PRE);
-        m->song = 1 + rand() % (BGM_LINES - 2);
+        m->song = 1 + rand() % (bgm_lines(m) - 2);
       } else if (m->screen == MENU_ST_LEVEL) {
         m->st_level = m->sel;
         st_rival_enter(m);
@@ -8519,7 +8695,7 @@ int menu_update(menu_state *m, float dt) {
         m->story_pick = st_index(st_loop(m), m->story_n);
         if (m->story_pick > 111) m->story_pick = 111;
         go(m, MENU_PRE);
-        m->song = 1 + rand() % (BGM_LINES - 2);
+        m->song = 1 + rand() % (bgm_lines(m) - 2);
       } else if (m->screen == MENU_ST_TUNE) {
         /* the part going on (seqStTuneEff) */
         int power = m->tune.choice, p0 = m->st_power[m->maker][m->car];
@@ -8741,9 +8917,17 @@ void menu_draw(const menu_state *m, float screen_w, float screen_h, void (*draw3
     draw_setting(m, clock, draw3d, ctx, bars);
     if (!m->deciding) hud_draw_menu_keys(screen_w, screen_h, m->key_held, m->tune_full[m->maker][m->car], 1);
     if (!m->deciding && !m->new_card) hud_draw_menu_dress(screen_w, screen_h, m->key_held == HUD_MENU_OPTION);
+    if (!m->deciding && !m->new_card) draw_setting_cs_key(screen_w, screen_h);
     anm_fill(0, 0, 0, 1.0f - fade);
     if (m->flash) anm_fill(1, 1, 1, (float)m->flash / FLASH_LEN);
     setting_warm();
+    return;
+  }
+  if (m->screen == MENU_CARDSET) {
+    if (m->t < FADE) fade = (float)(m->t + 1) / FADE;
+    draw_cardset(m, clock, bars, screen_w, screen_h);
+    hud_draw_menu_keys(screen_w, screen_h, m->key_held, 0, 1);
+    anm_fill(0, 0, 0, 1.0f - fade);
     return;
   }
   if (m->screen == MENU_BGM) {
